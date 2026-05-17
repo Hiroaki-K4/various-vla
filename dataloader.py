@@ -1,5 +1,11 @@
+import io
+
 import datasets
+import numpy as np
+import torch
+from PIL import Image
 from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 
 DATASETS = [
     "fractal20220817_data",
@@ -79,9 +85,23 @@ def get_dataloader(batch_size=8, split="train"):
                 for step in episode["steps"]:
                     obs = step.get("observation", {})
 
-                    # TODO: Fix None error
-                    all_intructions.append(obs.get("natural_language_instruction", b""))
-                    all_images.append(obs.get("image", {"bytes": None}))
+                    instruction = obs.get("natural_language_instruction", "")
+                    if isinstance(instruction, bytes):
+                        instruction = instruction.decode("utf-8", errors="ignore")
+
+                    image_field = obs.get("image", None)
+                    image_bytes = None
+                    if isinstance(image_field, dict):
+                        image_bytes = image_field.get("bytes", None)
+                    elif isinstance(image_field, (bytes, bytearray)):
+                        image_bytes = bytes(image_field)
+
+                    if image_bytes is None:
+                        # Skip steps without an image so collate doesn't see None.
+                        continue
+
+                    all_intructions.append(instruction)
+                    all_images.append(image_bytes)
                     all_actions.append(step["action"])
 
             return {
@@ -96,11 +116,24 @@ def get_dataloader(batch_size=8, split="train"):
 
     combined_ds = datasets.interleave_datasets(ds_list, seed=42)
 
-    return DataLoader(combined_ds, batch_size=batch_size)
+    return DataLoader(combined_ds, batch_size=batch_size, collate_fn=collate_fn)
+
+
+def _decode_image(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    return torch.from_numpy(np.array(img))
+
+
+def collate_fn(batch):
+    instructions = [item["instruction"] for item in batch]
+    images = [_decode_image(item["image"]) for item in batch]
+    actions = default_collate([item["action"] for item in batch])
+    return {"instruction": instructions, "image": images, "action": actions}
 
 
 if __name__ == "__main__":
     loader = get_dataloader(batch_size=8, split="train")
     for i, batch in enumerate(loader):
+        print("Batch data")
         print(batch)
         input()
