@@ -64,7 +64,7 @@ DATASETS = [
 ]
 
 
-def get_dataloader(batch_size=8, split="train"):
+def get_dataloader(batch_size=8, split="train", seq_len=10, traj_stride=1):
     ds_list = []
     for name in DATASETS:
         ds = datasets.load_dataset(
@@ -75,20 +75,18 @@ def get_dataloader(batch_size=8, split="train"):
             trust_remote_code=True,
         )
 
-        def flatten_steps(examples):
-            all_intructions = []
-            all_images = []
-            all_actions = []
+        def chunk_episodes(examples):
+            traj_instructions = []
+            traj_images = []
+            traj_actions = []
 
             episodes = examples.get("data.pickle", examples.get("steps", []))
             for episode in episodes:
-                for step in episode["steps"]:
+                steps = episode["steps"]
+
+                valid_steps = []
+                for step in steps:
                     obs = step.get("observation", {})
-
-                    instruction = obs.get("natural_language_instruction", "")
-                    if isinstance(instruction, bytes):
-                        instruction = instruction.decode("utf-8", errors="ignore")
-
                     image_field = obs.get("image", None)
                     image_bytes = None
                     if isinstance(image_field, dict):
@@ -96,21 +94,74 @@ def get_dataloader(batch_size=8, split="train"):
                     elif isinstance(image_field, (bytes, bytearray)):
                         image_bytes = bytes(image_field)
 
-                    if image_bytes is None:
-                        # Skip steps without an image so collate doesn't see None.
-                        continue
+                    if image_bytes is not None:
+                        instruction = obs.get("natural_language_instruction", "")
+                        if isinstance(instruction, bytes):
+                            instruction = instruction.decode("utf-8", errors="ignore")
 
-                    all_intructions.append(instruction)
-                    all_images.append(image_bytes)
-                    all_actions.append(step["action"])
+                        valid_steps.append(
+                            {
+                                "instruction": instruction,
+                                "image": image_bytes,
+                                "action": step["action"],
+                            }
+                        )
+
+                if len(valid_steps) < seq_len:
+                    continue
+                else:
+                    for start_idx in range(
+                        0, len(valid_steps) - seq_len + 1, traj_stride
+                    ):
+                        end_idx = start_idx + seq_len
+                        sub_steps = valid_steps[start_idx:end_idx]
+
+                        traj_instructions.append([s["instruction"] for s in sub_steps])
+                        traj_images.append([s["image"] for s in sub_steps])
+                        traj_actions.append([s["action"] for s in sub_steps])
 
             return {
-                "instruction": all_intructions,
-                "image": all_images,
-                "action": all_actions,
+                "instruction": traj_instructions,
+                "image": traj_images,
+                "action": traj_actions,
             }
 
-        ds = ds.map(flatten_steps, batched=True, remove_columns=ds.column_names)
+        # def flatten_steps(examples):
+        #     all_intructions = []
+        #     all_images = []
+        #     all_actions = []
+
+        #     episodes = examples.get("data.pickle", examples.get("steps", []))
+        #     for episode in episodes:
+        #         for step in episode["steps"]:
+        #             obs = step.get("observation", {})
+
+        #             instruction = obs.get("natural_language_instruction", "")
+        #             if isinstance(instruction, bytes):
+        #                 instruction = instruction.decode("utf-8", errors="ignore")
+
+        #             image_field = obs.get("image", None)
+        #             image_bytes = None
+        #             if isinstance(image_field, dict):
+        #                 image_bytes = image_field.get("bytes", None)
+        #             elif isinstance(image_field, (bytes, bytearray)):
+        #                 image_bytes = bytes(image_field)
+
+        #             if image_bytes is None:
+        #                 # Skip steps without an image so collate doesn't see None.
+        #                 continue
+
+        #             all_intructions.append(instruction)
+        #             all_images.append(image_bytes)
+        #             all_actions.append(step["action"])
+
+        #     return {
+        #         "instruction": all_intructions,
+        #         "image": all_images,
+        #         "action": all_actions,
+        # }
+
+        ds = ds.map(chunk_episodes, batched=True, remove_columns=ds.column_names)
 
         ds_list.append(ds)
 
@@ -119,21 +170,53 @@ def get_dataloader(batch_size=8, split="train"):
     return DataLoader(combined_ds, batch_size=batch_size, collate_fn=collate_fn)
 
 
-def _decode_image(image_bytes):
+def _decode_image(image_bytes, image_size):
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    img = img.resize(image_size, Image.BILINEAR)
     return torch.from_numpy(np.array(img))
 
 
 def collate_fn(batch):
-    instructions = [item["instruction"] for item in batch]
-    images = [_decode_image(item["image"]) for item in batch]
-    actions = default_collate([item["action"] for item in batch])
-    return {"instruction": instructions, "image": images, "action": actions}
+    # instructions = [item["instruction"] for item in batch]
+    # images = [_decode_image(item["image"]) for item in batch]
+    # actions = default_collate([item["action"] for item in batch])
+    # return {"instruction": instructions, "image": images, "action": actions}
+
+    out_instructions = []
+    out_images = []
+    out_actions = []
+    for item in batch:
+        out_instructions.append(item["instruction"])
+
+        traj_imgs = torch.stack(
+            [_decode_image(img_b, (256, 256)) for img_b in item["image"]]
+        )
+        out_images.append(traj_imgs)
+
+        traj_acts = default_collate(item["action"])
+        out_actions.append(traj_acts)
+
+    final_images = torch.stack(out_images)
+
+    return {
+        "instruction": out_instructions,
+        "image": final_images,
+        "action": out_actions,
+    }
 
 
 if __name__ == "__main__":
-    loader = get_dataloader(batch_size=8, split="train")
+    loader = get_dataloader(batch_size=4, split="train", seq_len=10)
     for i, batch in enumerate(loader):
-        print("Batch data")
-        print(batch)
-        input()
+        print(f"--- Batch {i} ---")
+        print(
+            "Instruction length: ",
+            len(batch["instruction"]),
+            "x",
+            len(batch["instruction"][0]),
+        )
+        print("Image tensor shape: ", batch["image"].shape)
+        print(
+            "Action (per-sample dict keys): ", [list(a.keys()) for a in batch["action"]]
+        )
+        break
