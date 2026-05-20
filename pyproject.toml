@@ -13,4 +13,5 @@ dependencies = [
     "torchaudio>=2.5.1",
     "torchvision>=0.20.1",
     "webdataset>=1.0.2",
+    "xformers>=0.0.35",
 ]
