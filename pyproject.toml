@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "accelerate>=1.13.0",
     "datasets<3.0.0",
     "matplotlib>=3.10.9",
     "opencv-python>=4.13.0.92",
@@ -15,6 +16,7 @@ dependencies = [
     "torch>=2.5.1",
     "torchaudio>=2.5.1",
     "torchvision>=0.20.1",
+    "transformers>=5.9.0",
     "webdataset>=1.0.2",
     "xformers>=0.0.35",
 ]
