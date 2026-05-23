@@ -126,41 +126,6 @@ def get_dataloader(batch_size=8, split="train", seq_len=10, traj_stride=1):
                 "action": traj_actions,
             }
 
-        # def flatten_steps(examples):
-        #     all_intructions = []
-        #     all_images = []
-        #     all_actions = []
-
-        #     episodes = examples.get("data.pickle", examples.get("steps", []))
-        #     for episode in episodes:
-        #         for step in episode["steps"]:
-        #             obs = step.get("observation", {})
-
-        #             instruction = obs.get("natural_language_instruction", "")
-        #             if isinstance(instruction, bytes):
-        #                 instruction = instruction.decode("utf-8", errors="ignore")
-
-        #             image_field = obs.get("image", None)
-        #             image_bytes = None
-        #             if isinstance(image_field, dict):
-        #                 image_bytes = image_field.get("bytes", None)
-        #             elif isinstance(image_field, (bytes, bytearray)):
-        #                 image_bytes = bytes(image_field)
-
-        #             if image_bytes is None:
-        #                 # Skip steps without an image so collate doesn't see None.
-        #                 continue
-
-        #             all_intructions.append(instruction)
-        #             all_images.append(image_bytes)
-        #             all_actions.append(step["action"])
-
-        #     return {
-        #         "instruction": all_intructions,
-        #         "image": all_images,
-        #         "action": all_actions,
-        # }
-
         ds = ds.map(chunk_episodes, batched=True, remove_columns=ds.column_names)
 
         ds_list.append(ds)
@@ -177,11 +142,6 @@ def _decode_image(image_bytes, image_size):
 
 
 def collate_fn(batch):
-    # instructions = [item["instruction"] for item in batch]
-    # images = [_decode_image(item["image"]) for item in batch]
-    # actions = default_collate([item["action"] for item in batch])
-    # return {"instruction": instructions, "image": images, "action": actions}
-
     out_instructions = []
     out_images = []
     out_actions = []

@@ -1,6 +1,7 @@
 import timm
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
@@ -15,7 +16,9 @@ class VLAModel(nn.Module):
             device
         )
         self.siglip = timm.create_model(
-            "vit_so400m_patch14_siglip_384", pretrained=True
+            "vit_so400m_patch14_siglip_384",
+            pretrained=True,
+            num_classes=0,
         ).to(device)
 
         # Get dimemtins
@@ -26,8 +29,8 @@ class VLAModel(nn.Module):
 
         # Language model
         self.tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
-        self.language_model = AutoModelForCausalLM.from_pretrained(
-            llm_model_name, dtype=torch.float16, low_cpu_mem_usage=True
+        self.llm = AutoModelForCausalLM.from_pretrained(
+            llm_model_name, dtype=torch.bfloat16, low_cpu_mem_usage=True
         ).to(device)
         llm_dim = self.llm.config.hidden_size  # 2048
         print("llm_dim:", llm_dim)
@@ -35,7 +38,7 @@ class VLAModel(nn.Module):
         # Projection layers
         self.projector = nn.Sequential(
             nn.Linear(vision_dim, llm_dim), nn.GELU(), nn.Linear(llm_dim, llm_dim)
-        ).to(device)
+        ).to(device=device, dtype=torch.bfloat16)
         if projector_path is not None:
             self.projector.load_state_dict(
                 torch.load(projector_path, map_location=device)
@@ -43,15 +46,21 @@ class VLAModel(nn.Module):
 
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
         """
-        images: (B, 3, 384, 384)
-        returns: (B, N, vision_dim)  N = Number of patches
+        images: (B, 3, 384, 384)  # SigLIP native size
+        returns: (B, N, vision_dim)  N = 27 * 27 = 729 patches
         """
         with torch.no_grad():
-            dino_feats = self.dino.forward_features(images)  # (B, N+1, 1024)
-            dino_feats = dino_feats[:, 1:, :]  # (B, N, 1024) Remove CLS token
-            siglip_feats = self.siglip.forward_features(images)  # (B, N, 1152)
+            # DINOv2 requires H, W divisible by patch_size=14 -> resize to 378
+            dino_input = F.interpolate(
+                images, size=(378, 378), mode="bilinear", align_corners=False
+            )
+            dino_out = self.dino.forward_features(dino_input)
+            dino_feats = dino_out["x_norm_patchtokens"]  # (B, 729, 1024)
 
-        vision_feats = torch.cat([dino_feats, siglip_feats], dim=-1)  # (B, N, 2176)
+            # SigLIP runs natively at 384 (floor(384/14)=27 patches per side)
+            siglip_feats = self.siglip.forward_features(images)  # (B, 729, 1152)
+
+        vision_feats = torch.cat([dino_feats, siglip_feats], dim=-1)  # (B, 729, 2176)
         return vision_feats.to(torch.bfloat16)
 
     def forward(
@@ -80,12 +89,14 @@ class VLAModel(nn.Module):
 
         # Extend attantion
         B, N, _ = vision_embeds.shape
-        vision_mask = torch.ones(B, N, dtype=attention_mask.dtype, device=self.device)
+        vision_mask = torch.ones(
+            B, N, dtype=attention_mask.dtype, device=attention_mask.device
+        )
         full_mask = torch.cat([vision_mask, attention_mask], dim=1)
 
         # 4. Pass inputs to LLM
         outputs = self.llm(
-            input_embeds=input_embeds,
+            inputs_embeds=input_embeds,
             attention_mask=full_mask,
             labels=labels,
         )
