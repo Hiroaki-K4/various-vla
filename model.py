@@ -6,10 +6,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 class VLAModel(nn.Module):
-    def __init__(self, llm_model_name, projector_path=None, device=None):
+    def __init__(self, llm_model_name, checkpoint_path=None, device=None):
         super().__init__()
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.device = device
 
         # Vision encoder
         self.dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vitl14_reg").to(
@@ -39,29 +41,56 @@ class VLAModel(nn.Module):
         self.projector = nn.Sequential(
             nn.Linear(vision_dim, llm_dim), nn.GELU(), nn.Linear(llm_dim, llm_dim)
         ).to(device=device, dtype=torch.bfloat16)
-        if projector_path is not None:
-            self.projector.load_state_dict(
-                torch.load(projector_path, map_location=device)
-            )
+
+        # Load checkpoint (all components at once)
+        if checkpoint_path is not None:
+            print(f"Loading checkpoint from {checkpoint_path}")
+            # Load to CPU first to avoid doubling GPU memory during state_dict copy
+            state_dict = torch.load(checkpoint_path, map_location="cpu")
+            self.load_state_dict(state_dict)
+            del state_dict
+            torch.cuda.empty_cache()
+            print("Checkpoint loaded.")
 
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
         """
         images: (B, 3, 384, 384)  # SigLIP native size
         returns: (B, N, vision_dim)  N = 27 * 27 = 729 patches
         """
-        with torch.no_grad():
-            # DINOv2 requires H, W divisible by patch_size=14 -> resize to 378
-            dino_input = F.interpolate(
-                images, size=(378, 378), mode="bilinear", align_corners=False
-            )
-            dino_out = self.dino.forward_features(dino_input)
-            dino_feats = dino_out["x_norm_patchtokens"]  # (B, 729, 1024)
+        # DINOv2 requires H, W divisible by patch_size=14 -> resize to 378
+        dino_input = F.interpolate(
+            images, size=(378, 378), mode="bilinear", align_corners=False
+        )
+        dino_out = self.dino.forward_features(dino_input)
+        dino_feats = dino_out["x_norm_patchtokens"]  # (B, 729, 1024)
 
-            # SigLIP runs natively at 384 (floor(384/14)=27 patches per side)
-            siglip_feats = self.siglip.forward_features(images)  # (B, 729, 1152)
+        # SigLIP runs natively at 384 (floor(384/14)=27 patches per side)
+        siglip_feats = self.siglip.forward_features(images)  # (B, 729, 1152)
 
         vision_feats = torch.cat([dino_feats, siglip_feats], dim=-1)  # (B, 729, 2176)
         return vision_feats.to(torch.bfloat16)
+
+    def _build_inputs(self, images, input_ids, attention_mask):
+        # Encode image -> projection
+        vision_feats = self.encode_image(images)  # (B, N, 2176)
+        vision_embeds = self.projector(vision_feats)  # (B, N, llm_dim)
+
+        # Get text embeddings
+        text_embeds = self.llm.get_input_embeddings()(input_ids)  # (B, T, llm_dim)
+
+        # Concat image embeddings and text embeddings
+        input_embeds = torch.cat(
+            [vision_embeds, text_embeds], dim=1
+        )  # (B, N+T, llm_dim)
+
+        # Extend attantion
+        B, N, _ = vision_embeds.shape
+        vision_mask = torch.ones(
+            B, N, dtype=attention_mask.dtype, device=attention_mask.device
+        )
+        full_mask = torch.cat([vision_mask, attention_mask], dim=1)
+
+        return input_embeds, full_mask, N
 
     def forward(
         self,
@@ -77,30 +106,48 @@ class VLAModel(nn.Module):
         labels: (B, T)
         """
 
-        # 1. Encode image -> projection
-        vision_feats = self.encode_image(images)  # (B, N, 2176)
-        vision_embeds = self.projector(vision_feats)  # (B, N, 2048)
-
-        # 2. Get text embeddings
-        text_embeds = self.llm.get_input_embeddings()(input_ids)  # (B, T, 2048)
-
-        # 3. Concat image embeddings and text embeddings
-        input_embeds = torch.cat([vision_embeds, text_embeds], dim=1)  # (B, N+T, 2048)
-
-        # Extend attantion
-        B, N, _ = vision_embeds.shape
-        vision_mask = torch.ones(
-            B, N, dtype=attention_mask.dtype, device=attention_mask.device
+        input_embeds, full_mask, N = self._build_inputs(
+            images, input_ids, attention_mask
         )
-        full_mask = torch.cat([vision_mask, attention_mask], dim=1)
+        if labels is not None:
+            B = images.shape[0]
+            vision_labels = torch.full(
+                (B, N), -100, dtype=labels.dtype, device=labels.device
+            )
+            full_labels = torch.cat([vision_labels, labels], dim=1)  # (B, N+T)
+        else:
+            full_labels = None
 
-        # 4. Pass inputs to LLM
+        # Pass inputs to LLM
         outputs = self.llm(
             inputs_embeds=input_embeds,
             attention_mask=full_mask,
-            labels=labels,
+            labels=full_labels,
         )
         return outputs
+
+    def generate(self, images, input_ids, attention_mask, max_new_tokens=7):
+        """
+        For inference
+
+        images: (B, 3, 384, 384)
+        returns: token ids (B, max_new_tokens)
+        """
+        input_embeds, full_mask, _ = self._build_inputs(
+            images, input_ids, attention_mask
+        )
+
+        output_ids = self.llm.generate(
+            inputs_embeds=input_embeds,
+            attention_mask=full_mask,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+        )
+        return output_ids
+
+    def save_checkpoint(self, path):
+        torch.save(self.state_dict(), path)
+        print(f"Checkpoint saved to {path}")
 
 
 if __name__ == "__main__":
@@ -110,6 +157,22 @@ if __name__ == "__main__":
     images = torch.randn(2, 3, 384, 384).to(device)
     input_ids = torch.randint(0, 1000, (2, 10)).to(device)
     attention_mask = torch.ones(2, 10, dtype=torch.long).to(device)
+    labels = torch.randint(0, 1000, (2, 10)).to(device)
 
-    out = model(images, input_ids, attention_mask)
-    print(out.logits.shape)  # (2, N+10, vocab_size)
+    # Training
+    out = model(images, input_ids, attention_mask, labels=labels)
+    print("loss:", out.loss)
+    print("logits:", out.logits.shape)  # (2, N+10, vocab_size)
+
+    # Inference
+    generated = model.generate(images, input_ids, attention_mask)
+    print("generated:", generated.shape)
+
+    model.save_checkpoint("checkpoint.pt")
+
+    del model
+    torch.cuda.empty_cache()
+
+    model2 = VLAModel(
+        "meta-llama/Llama-3.2-1B", checkpoint_path="checkpoint.pt", device=device
+    )
