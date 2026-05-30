@@ -9,6 +9,7 @@ dependencies = [
     "datasets<3.0.0",
     "matplotlib>=3.10.9",
     "opencv-python>=4.13.0.92",
+    "peft>=0.19.1",
     "pillow>=12.2.0",
     "pyarrow>=24.0.0",
     "scikit-learn>=1.8.0",
