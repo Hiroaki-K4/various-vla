@@ -3,6 +3,7 @@ from peft import LoraConfig, get_peft_model
 from transformers import AutoTokenizer
 
 from action_tokenizer import ActionTokenizer
+from dataloader import get_dataloader
 from model import VLAModel
 
 
@@ -20,9 +21,20 @@ def train(llm_model_name, batch_size, num_epochs, lr_rate, device):
 
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
     at = ActionTokenizer(tokenizer, n_bins=256)
-    print(at)
 
-    # TODO: Combine action_tokenizer and dataloader
+    train_loader = get_dataloader(tokenizer, at, batch_size=4, split="train")
+    for i, batch in enumerate(train_loader):
+        print(f"--- Batch(train_loader) {i} ---")
+        for k, v in batch.items():
+            print(f"{k}: {tuple(v.shape)} ({v.dtype})")
+        break
+
+    val_loader = get_dataloader(tokenizer, at, batch_size=4, split="train")
+    for i, batch in enumerate(train_loader):
+        print(f"--- Batch(train_loader) {i} ---")
+        for k, v in batch.items():
+            print(f"{k}: {tuple(v.shape)} ({v.dtype})")
+        break
 
 
 if __name__ == "__main__":
