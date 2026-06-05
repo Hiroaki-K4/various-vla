@@ -78,14 +78,23 @@ def get_dataloader(
     batch_size: int = 8,
     split: str = "train",
     num_workers: int = 0,
+    val_size: int = 256,
 ):
+    """
+    `jxu124/OpenX-Embodiment` provides only a `train` split, so we carve a
+    validation set out of it by taking the first `val_size` examples (per
+    sub-dataset) as val and skipping them for train.
+    """
+    if split not in ("train", "val"):
+        raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+
     ds_list = []
     for name in DATASETS:
         ds = datasets.load_dataset(
             "jxu124/OpenX-Embodiment",
             name,
             streaming=True,
-            split=split,
+            split="train",
             trust_remote_code=True,
         )
 
@@ -120,6 +129,12 @@ def get_dataloader(
             }
 
         ds = ds.map(chunk_episodes, batched=True, remove_columns=ds.column_names)
+
+        if split == "val":
+            ds = ds.take(val_size)
+        else:  # "train"
+            ds = ds.skip(val_size)
+
         ds_list.append(ds)
 
     combined_ds = datasets.interleave_datasets(ds_list, seed=42)
@@ -213,11 +228,18 @@ if __name__ == "__main__":
         tok.pad_token = tok.eos_token
     at = ActionTokenizer(tok, n_bins=256)
 
-    loader = get_dataloader(tok, at, batch_size=4, split="train")
-    for i, batch in enumerate(loader):
+    train_loader = get_dataloader(tok, at, batch_size=4, split="train")
+    print("Train Loader")
+    for i, batch in enumerate(train_loader):
         print(f"--- Batch {i} ---")
         for k, v in batch.items():
             print(f"{k}: {tuple(v.shape)} ({v.dtype})")
         break
 
-    # TODO: Split train data for validation data
+    print("\nValidation Loader")
+    val_loader = get_dataloader(tok, at, batch_size=4, split="val")
+    for i, batch in enumerate(val_loader):
+        print(f"--- Batch {i} ---")
+        for k, v in batch.items():
+            print(f"{k}: {tuple(v.shape)} ({v.dtype})")
+        break
