@@ -106,9 +106,6 @@ def train(
                 optimizer.zero_grad()
                 torch.cuda.empty_cache()  # Clear memory cache
 
-            print("loss:", loss.item() * gradient_accumulation_steps)
-            input()
-
             pbar.set_postfix({"train_loss": loss.item() * gradient_accumulation_steps})
 
             i += 1
