@@ -6,7 +6,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 class VLAModel(nn.Module):
-    def __init__(self, llm_model_name, checkpoint_path=None, device=None):
+    def __init__(
+        self,
+        llm_model_name,
+        checkpoint_path=None,
+        dino_checkpoint_path=None,
+        siglip_checkpoint_path=None,
+        device=None,
+    ):
         super().__init__()
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,9 +37,8 @@ class VLAModel(nn.Module):
         print("vision_dim:", vision_dim)
 
         # Language model
-        self.tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
         self.llm = AutoModelForCausalLM.from_pretrained(
-            llm_model_name, dtype=torch.bfloat16, low_cpu_mem_usage=True
+            llm_model_name, dtype=torch.float16, low_cpu_mem_usage=True
         ).to(device)
         llm_dim = self.llm.config.hidden_size  # 2048
         print("llm_dim:", llm_dim)
@@ -40,7 +46,7 @@ class VLAModel(nn.Module):
         # Projection layers
         self.projector = nn.Sequential(
             nn.Linear(vision_dim, llm_dim), nn.GELU(), nn.Linear(llm_dim, llm_dim)
-        ).to(device=device, dtype=torch.bfloat16)
+        ).to(device=device, dtype=torch.float16)
 
         # Load checkpoint (all components at once)
         if checkpoint_path is not None:
@@ -51,6 +57,23 @@ class VLAModel(nn.Module):
             del state_dict
             torch.cuda.empty_cache()
             print("Checkpoint loaded.")
+
+        # Load fine-tuned vision encoder weights separately if provided
+        if dino_checkpoint_path is not None:
+            print(f"Loading DINO checkpoint from {dino_checkpoint_path}")
+            sd = torch.load(dino_checkpoint_path, map_location="cpu")
+            self.dino.load_state_dict(sd)
+            del sd
+            torch.cuda.empty_cache()
+            print("DINO checkpoint loaded.")
+
+        if siglip_checkpoint_path is not None:
+            print(f"Loading SigLIP checkpoint from {siglip_checkpoint_path}")
+            sd = torch.load(siglip_checkpoint_path, map_location="cpu")
+            self.siglip.load_state_dict(sd)
+            del sd
+            torch.cuda.empty_cache()
+            print("SigLIP checkpoint loaded.")
 
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -68,7 +91,7 @@ class VLAModel(nn.Module):
         siglip_feats = self.siglip.forward_features(images)  # (B, 729, 1152)
 
         vision_feats = torch.cat([dino_feats, siglip_feats], dim=-1)  # (B, 729, 2176)
-        return vision_feats.to(torch.bfloat16)
+        return vision_feats.to(torch.float16)
 
     def _build_inputs(self, images, input_ids, attention_mask):
         # Encode image -> projection
@@ -167,12 +190,3 @@ if __name__ == "__main__":
     # Inference
     generated = model.generate(images, input_ids, attention_mask)
     print("generated:", generated.shape)
-
-    model.save_checkpoint("checkpoint.pt")
-
-    del model
-    torch.cuda.empty_cache()
-
-    model2 = VLAModel(
-        "meta-llama/Llama-3.2-1B", checkpoint_path="checkpoint.pt", device=device
-    )

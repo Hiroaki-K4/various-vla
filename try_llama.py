@@ -7,7 +7,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(
-        model_id, dtype=torch.bfloat16, device_map="auto"
+        model_id, dtype=torch.float16, device_map="auto"
     )
 
     prompt = "The capital of France is"

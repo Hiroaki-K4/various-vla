@@ -32,7 +32,6 @@ class ActionTokenizer:
         self.n_bins = n_bins
 
         self._bins, self._bin_centers = self._make_bins(n_bins)
-        self.action_token_begin_idx: int = int(tokenizer.vocab_size - (n_bins + 1))
 
     def tokenize(self, action: np.ndarray | torch.Tensor) -> np.ndarray:
         """

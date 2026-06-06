@@ -49,6 +49,7 @@ def train(
     lr_rate,
     patience,
     eval_interval,
+    num_workers,
     device,
     save_model_path,
     gradient_accumulation_steps=1,
@@ -67,8 +68,12 @@ def train(
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
     at = ActionTokenizer(tokenizer, n_bins=256)
 
-    train_loader = get_dataloader(tokenizer, at, batch_size=4, split="train")
-    val_loader = get_dataloader(tokenizer, at, batch_size=4, split="val")
+    train_loader = get_dataloader(
+        tokenizer, at, batch_size=batch_size, split="train", num_workers=num_workers
+    )
+    val_loader = get_dataloader(
+        tokenizer, at, batch_size=batch_size, split="val", num_workers=num_workers
+    )
 
     # Parameters for early stopping
     best_val_loss = float("inf")
@@ -116,7 +121,19 @@ def train(
                     best_val_loss = val_loss
                     patience_counter = 0
                     model.llm.save_pretrained(save_model_path)
-                    # TODO: Think about which model to save
+                    torch.save(
+                        model.projector.state_dict(),
+                        f"{save_model_path}_projector.pth",
+                    )
+                    torch.save(
+                        model.dino.state_dict(),
+                        f"{save_model_path}_dino.pth",
+                    )
+                    torch.save(
+                        model.siglip.state_dict(),
+                        f"{save_model_path}_siglip.pth",
+                    )
+
                     print("New best model saved!")
                 else:
                     patience_counter += 1
@@ -134,8 +151,9 @@ if __name__ == "__main__":
     lr_rate = 1e-5
     patience = 3
     eval_interval = 1000
+    num_workers = 4
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    save_model_path = "vla_model"
+    save_model_path = "best_vla_model"
     gradient_accumulation_steps = 2
     train(
         llm_model_name,
@@ -144,6 +162,7 @@ if __name__ == "__main__":
         lr_rate,
         patience,
         eval_interval,
+        num_workers,
         device,
         save_model_path,
         gradient_accumulation_steps,
