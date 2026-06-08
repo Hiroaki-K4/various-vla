@@ -36,17 +36,17 @@ class VLAModel(nn.Module):
         vision_dim = dino_dim + siglip_dim  # 2176
         print("vision_dim:", vision_dim)
 
-        # Language model
+        # Language model (fp32 master weights; fp16 is applied via autocast)
         self.llm = AutoModelForCausalLM.from_pretrained(
-            llm_model_name, dtype=torch.float16, low_cpu_mem_usage=True
+            llm_model_name, low_cpu_mem_usage=True
         ).to(device)
         llm_dim = self.llm.config.hidden_size  # 2048
         print("llm_dim:", llm_dim)
 
-        # Projection layers
+        # Projection layers (fp32 master weights)
         self.projector = nn.Sequential(
             nn.Linear(vision_dim, llm_dim), nn.GELU(), nn.Linear(llm_dim, llm_dim)
-        ).to(device=device, dtype=torch.float16)
+        ).to(device=device)
 
         # Load checkpoint (all components at once)
         if checkpoint_path is not None:
@@ -91,7 +91,7 @@ class VLAModel(nn.Module):
         siglip_feats = self.siglip.forward_features(images)  # (B, 729, 1152)
 
         vision_feats = torch.cat([dino_feats, siglip_feats], dim=-1)  # (B, 729, 2176)
-        return vision_feats.to(torch.float16)
+        return vision_feats
 
     def _build_inputs(self, images, input_ids, attention_mask):
         # Encode image -> projection
