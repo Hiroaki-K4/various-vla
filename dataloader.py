@@ -3,6 +3,7 @@ import io
 import datasets
 import numpy as np
 import torch
+from datasets import Features, IterableDataset, Sequence, Value
 from PIL import Image
 from torch.utils.data import DataLoader
 
@@ -10,6 +11,18 @@ from action_tokenizer import ActionTokenizer
 
 IMAGE_SIZE = (384, 384)
 PROMPT_TEMPLATE = "In: What action should the robot take to {instruction}?\nOut:"
+
+# Explicit output schema for `chunk_episodes`. Providing this to `.map()` lets
+# `interleave_datasets` skip its `_resolve_features()` step, which otherwise
+# tries to download one tar shard from every sub-dataset just to peek at the
+# schema (a curl/network failure on any of them aborts everything).
+OUTPUT_FEATURES = Features(
+    {
+        "instruction": Value("string"),
+        "image": Value("binary"),
+        "action": Sequence(Value("float32"), length=7),
+    }
+)
 
 
 DATASETS = [
@@ -120,7 +133,7 @@ def get_dataloader(
 
                     out_instr.append(instruction)
                     out_img.append(image_bytes)
-                    out_act.append(step["action"])
+                    out_act.append(_action_dict_to_vec(step["action"]).tolist())
 
             return {
                 "instruction": out_instr,
@@ -128,14 +141,19 @@ def get_dataloader(
                 "action": out_act,
             }
 
-        ds = ds.map(chunk_episodes, batched=True, remove_columns=ds.column_names)
+        ds = ds.map(
+            chunk_episodes,
+            batched=True,
+            remove_columns=ds.column_names,
+            features=OUTPUT_FEATURES,
+        )
 
         if split == "val":
             ds = ds.take(val_size)
         else:  # "train"
             ds = ds.skip(val_size)
 
-        ds_list.append(ds)
+        ds_list.append(_make_resilient(ds, name))
 
     combined_ds = datasets.interleave_datasets(ds_list, seed=42)
 
@@ -167,6 +185,26 @@ def _action_dict_to_vec(action) -> np.ndarray:
     return np.concatenate([wv, rot, grip], axis=0)  # (7,)
 
 
+def _make_resilient(ds: IterableDataset, name: str) -> IterableDataset:
+    """
+    Wrap a streaming dataset so that transient curl/network failures (e.g.
+    `OSError: ... exit 18 (read)` — partial tar download from HF) don't crash
+    the whole training loop. On error we simply stop yielding from this
+    sub-dataset for the rest of the epoch; `interleave_datasets` keeps cycling
+    through the remaining ones.
+    """
+
+    def gen():
+        try:
+            for ex in ds:
+                yield ex
+        except (OSError, IOError) as e:  # noqa: UP024 (IOError kept for clarity)
+            print(f"[dataloader] sub-dataset {name!r} stopped early: {e}")
+            return
+
+    return IterableDataset.from_generator(gen, features=OUTPUT_FEATURES)
+
+
 def collate_fn(batch, tokenizer, action_tokenizer: ActionTokenizer):
     """
     Each sample = 1 step (image + instruction + action).
@@ -191,7 +229,7 @@ def collate_fn(batch, tokenizer, action_tokenizer: ActionTokenizer):
         prompt = PROMPT_TEMPLATE.format(instruction=item["instruction"])
         prompt_ids = tokenizer(prompt, add_special_tokens=True).input_ids
 
-        act_vec = _action_dict_to_vec(item["action"])
+        act_vec = np.asarray(item["action"], dtype=np.float32)
         act_ids = action_tokenizer.tokenize(act_vec).tolist()
 
         ids = prompt_ids + act_ids + [eos_id]
