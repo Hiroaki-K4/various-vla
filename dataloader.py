@@ -1,4 +1,5 @@
 import io
+import warnings
 
 import datasets
 import numpy as np
@@ -8,6 +9,16 @@ from PIL import Image
 from torch.utils.data import DataLoader
 
 from action_tokenizer import ActionTokenizer
+
+# Silence the noisy `WebDataset(shardshuffle=...) is None` warning emitted from
+# inside `webdataset.compat` for every shard in every worker. We don't control
+# the call site (it lives inside the OpenX-Embodiment loader script), so we
+# just filter it here.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*WebDataset\(shardshuffle=\.\.\.\) is None.*",
+    category=UserWarning,
+)
 
 IMAGE_SIZE = (384, 384)
 PROMPT_TEMPLATE = "In: What action should the robot take to {instruction}?\nOut:"
@@ -185,22 +196,41 @@ def _action_dict_to_vec(action) -> np.ndarray:
     return np.concatenate([wv, rot, grip], axis=0)  # (7,)
 
 
-def _make_resilient(ds: IterableDataset, name: str) -> IterableDataset:
+def _make_resilient(
+    ds: IterableDataset, name: str, max_retries: int = 5
+) -> IterableDataset:
     """
     Wrap a streaming dataset so that transient curl/network failures (e.g.
-    `OSError: ... exit 18 (read)` — partial tar download from HF) don't crash
-    the whole training loop. On error we simply stop yielding from this
-    sub-dataset for the rest of the epoch; `interleave_datasets` keeps cycling
-    through the remaining ones.
+    `OSError: ... exit 92 (read)` — partial tar download from HF) don't kill
+    the sub-dataset for the rest of the epoch.
+
+    On error we re-create the iterator (which lets `datasets`/`webdataset`
+    move past the bad shard on its next attempt) up to `max_retries` times
+    before giving up. `interleave_datasets` keeps cycling through the other
+    sub-datasets in the meantime.
     """
 
     def gen():
-        try:
-            for ex in ds:
-                yield ex
-        except (OSError, IOError) as e:  # noqa: UP024 (IOError kept for clarity)
-            print(f"[dataloader] sub-dataset {name!r} stopped early: {e}")
-            return
+        retries = 0
+        while True:
+            try:
+                for ex in iter(ds):
+                    yield ex
+                return  # iterator exhausted cleanly
+            except (OSError, IOError) as e:  # noqa: UP024 (IOError kept for clarity)
+                retries += 1
+                if retries > max_retries:
+                    print(
+                        f"[dataloader] sub-dataset {name!r} giving up after "
+                        f"{max_retries} retries: {e}"
+                    )
+                    return
+                print(
+                    f"[dataloader] sub-dataset {name!r} hit shard error "
+                    f"(retry {retries}/{max_retries}): {e}"
+                )
+                # Loop around and rebuild the iterator from `ds`; HF's
+                # streaming layer will re-issue curl for the next shard.
 
     return IterableDataset.from_generator(gen, features=OUTPUT_FEATURES)
 
