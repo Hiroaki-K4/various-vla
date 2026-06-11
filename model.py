@@ -34,14 +34,12 @@ class VLAModel(nn.Module):
         dino_dim = self.dino.num_features  # 1024
         siglip_dim = self.siglip.num_features  # 1152
         vision_dim = dino_dim + siglip_dim  # 2176
-        print("vision_dim:", vision_dim)
 
         # Language model (fp32 master weights; fp16 is applied via autocast)
         self.llm = AutoModelForCausalLM.from_pretrained(
             llm_model_name, low_cpu_mem_usage=True
         ).to(device)
         llm_dim = self.llm.config.hidden_size  # 2048
-        print("llm_dim:", llm_dim)
 
         # Projection layers (fp32 master weights)
         self.projector = nn.Sequential(

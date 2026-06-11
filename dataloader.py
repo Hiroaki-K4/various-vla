@@ -142,9 +142,13 @@ def get_dataloader(
                     if isinstance(instruction, bytes):
                         instruction = instruction.decode("utf-8", errors="ignore")
 
+                    act_vec = _action_to_vec(step.get("action"))
+                    if act_vec is None:
+                        continue
+
                     out_instr.append(instruction)
                     out_img.append(image_bytes)
-                    out_act.append(_action_dict_to_vec(step["action"]).tolist())
+                    out_act.append(act_vec.tolist())
 
             return {
                 "instruction": out_instr,
@@ -186,14 +190,70 @@ def _decode_image(image_bytes, image_size=IMAGE_SIZE):
     return torch.from_numpy(arr).permute(2, 0, 1)  # (3, H, W)
 
 
-def _action_dict_to_vec(action) -> np.ndarray:
+# Per-component fallback keys across OpenX sub-datasets. The schema for
+# `step['action']` is *not* unified — some datasets give RT-1 style dicts
+# (`world_vector` / `rotation_delta` / `gripper_closedness_action`), some use
+# alternative names (`gripper`, `open_gripper`, ...), and a handful expose the
+# action as a flat 7-dim tensor directly. We try a list of candidates per slot
+# and skip the step if none of them are present.
+_WORLD_VECTOR_KEYS = ("world_vector", "base_displacement_vector", "linear_velocity")
+_ROTATION_KEYS = (
+    "rotation_delta",
+    "base_displacement_vertical_rotation",
+    "angular_velocity",
+)
+_GRIPPER_KEYS = (
+    "gripper_closedness_action",
+    "gripper",
+    "open_gripper",
+    "grasp",
+    "gripper_action",
+)
+
+
+def _first_present(d: dict, keys):
+    for k in keys:
+        if k in d:
+            return d[k]
+    return None
+
+
+def _action_to_vec(action) -> np.ndarray | None:
     """
-    OpenX action dict -> 7-dim vector [dx, dy, dz, droll, dpitch, dyaw, gripper]
+    Best-effort conversion of an OpenX `step['action']` into a 7-dim vector
+    `[dx, dy, dz, droll, dpitch, dyaw, gripper]`. Returns None if the action
+    cannot be mapped (caller should skip the step).
     """
-    wv = np.asarray(action["world_vector"], dtype=np.float32).reshape(-1)
-    rot = np.asarray(action["rotation_delta"], dtype=np.float32).reshape(-1)
-    grip = np.asarray(action["gripper_closedness_action"], dtype=np.float32).reshape(-1)
-    return np.concatenate([wv, rot, grip], axis=0)  # (7,)
+    if action is None:
+        return None
+
+    # Some datasets already give a flat numeric action.
+    if not isinstance(action, dict):
+        try:
+            arr = np.asarray(action, dtype=np.float32).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        if arr.size < 7:
+            return None
+        return arr[:7]
+
+    wv_raw = _first_present(action, _WORLD_VECTOR_KEYS)
+    rot_raw = _first_present(action, _ROTATION_KEYS)
+    grip_raw = _first_present(action, _GRIPPER_KEYS)
+    if wv_raw is None or rot_raw is None or grip_raw is None:
+        return None
+
+    try:
+        wv = np.asarray(wv_raw, dtype=np.float32).reshape(-1)
+        rot = np.asarray(rot_raw, dtype=np.float32).reshape(-1)
+        grip = np.asarray(grip_raw, dtype=np.float32).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+
+    if wv.size < 3 or rot.size < 3 or grip.size < 1:
+        return None
+
+    return np.concatenate([wv[:3], rot[:3], grip[:1]], axis=0)  # (7,)
 
 
 def _make_resilient(
