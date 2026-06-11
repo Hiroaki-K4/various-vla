@@ -1,4 +1,5 @@
 import io
+import time
 import warnings
 
 import datasets
@@ -114,13 +115,11 @@ def get_dataloader(
 
     ds_list = []
     for name in DATASETS:
-        ds = datasets.load_dataset(
-            "jxu124/OpenX-Embodiment",
-            name,
-            streaming=True,
-            split="train",
-            trust_remote_code=True,
-        )
+        ds = _load_openx_with_retry(name)
+        if ds is None:
+            # Sub-dataset is unreachable right now; skip it for this run
+            # rather than aborting the whole training job.
+            continue
 
         def chunk_episodes(examples):
             out_instr, out_img, out_act = [], [], []
@@ -169,6 +168,12 @@ def get_dataloader(
             ds = ds.skip(val_size)
 
         ds_list.append(_make_resilient(ds, name))
+
+    if not ds_list:
+        raise RuntimeError(
+            "All OpenX-Embodiment sub-datasets failed to load. "
+            "Check your network connection to huggingface.co."
+        )
 
     combined_ds = datasets.interleave_datasets(ds_list, seed=42)
 
@@ -254,6 +259,46 @@ def _action_to_vec(action) -> np.ndarray | None:
         return None
 
     return np.concatenate([wv[:3], rot[:3], grip[:1]], axis=0)  # (7,)
+
+
+def _load_openx_with_retry(
+    name: str,
+    max_retries: int = 5,
+    backoff: float = 2.0,
+):
+    """
+    Call `datasets.load_dataset("jxu124/OpenX-Embodiment", name, streaming=True)`
+    with retry-on-network-error.
+
+    The OpenX-Embodiment loader script peeks at one tar shard from inside
+    `_split_generators` (to infer the schema), so transient HF `curl` failures
+    surface here — before iteration even starts — and `_make_resilient` can't
+    catch them. We retry a few times with exponential backoff, and return
+    `None` if the sub-dataset is still unreachable so the caller can skip it.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            return datasets.load_dataset(
+                "jxu124/OpenX-Embodiment",
+                name,
+                streaming=True,
+                split="train",
+                trust_remote_code=True,
+            )
+        except (OSError, IOError) as e:  # noqa: UP024
+            if attempt == max_retries:
+                print(
+                    f"[dataloader] sub-dataset {name!r} unreachable after "
+                    f"{max_retries} load_dataset retries: {e}. Skipping."
+                )
+                return None
+            delay = backoff**attempt
+            print(
+                f"[dataloader] sub-dataset {name!r} load_dataset failed "
+                f"(attempt {attempt}/{max_retries}, retrying in {delay:.1f}s): {e}"
+            )
+            time.sleep(delay)
+    return None
 
 
 def _make_resilient(
