@@ -180,12 +180,22 @@ def get_dataloader(
     def _collate(batch):
         return collate_fn(batch, tokenizer, action_tokenizer)
 
-    return DataLoader(
-        combined_ds,
+    # `num_workers >= 1` is important here: every sub-dataset is streamed via
+    # `curl` from HuggingFace, so without parallel workers + prefetch the
+    # main loop blocks on shard downloads between batches.
+    loader_kwargs = dict(
         batch_size=batch_size,
         collate_fn=_collate,
         num_workers=num_workers,
+        pin_memory=True,
     )
+    if num_workers > 0:
+        loader_kwargs.update(
+            prefetch_factor=4,
+            persistent_workers=True,
+        )
+
+    return DataLoader(combined_ds, **loader_kwargs)
 
 
 def _decode_image(image_bytes, image_size=IMAGE_SIZE):
