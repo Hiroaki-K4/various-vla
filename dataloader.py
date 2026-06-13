@@ -5,6 +5,7 @@ import warnings
 import datasets
 import numpy as np
 import torch
+import webdataset.compat as _wds_compat
 from datasets import Features, IterableDataset, Sequence, Value
 from PIL import Image
 from torch.utils.data import DataLoader
@@ -20,6 +21,21 @@ warnings.filterwarnings(
     message=r".*WebDataset\(shardshuffle=\.\.\.\) is None.*",
     category=UserWarning,
 )
+
+# Disable webdataset's `check_empty` filter. By default it raises
+# `ValueError: No samples found in dataset; perhaps you have fewer shards than
+# workers.` whenever a single tar shard yields zero raw samples. With multi-
+# worker streaming + sharded HF datasets, individual shards can legitimately be
+# empty for a given worker (e.g. when the worker's slice of an n_shards=4
+# sub-dataset happens to be a tar that fails to decode any sample), and the
+# OpenX-Embodiment loader script we depend on constructs `WebDataset(...)`
+# without exposing `empty_check`. The simplest fix is to make `check_empty` a
+# passthrough.
+def _check_empty_passthrough(source):
+    yield from source
+
+
+_wds_compat.check_empty = _check_empty_passthrough
 
 IMAGE_SIZE = (384, 384)
 PROMPT_TEMPLATE = "In: What action should the robot take to {instruction}?\nOut:"
