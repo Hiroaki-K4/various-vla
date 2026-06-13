@@ -180,18 +180,32 @@ def get_dataloader(
     def _collate(batch):
         return collate_fn(batch, tokenizer, action_tokenizer)
 
-    # `num_workers >= 1` is important here: every sub-dataset is streamed via
-    # `curl` from HuggingFace, so without parallel workers + prefetch the
-    # main loop blocks on shard downloads between batches.
+    # HuggingFace caps `num_workers` at `dataset.n_shards`. Because
+    # `_make_resilient` wraps each sub-dataset via `IterableDataset.from_generator`
+    # (which is single-shard), the interleaved dataset ends up with n_shards=1
+    # and HF prints a noisy "Too many dataloader workers" warning while silently
+    # downgrading to 1 worker. We cap here to avoid the warning and make the
+    # actual worker count explicit.
+    n_shards = getattr(combined_ds, "n_shards", 1) or 1
+    effective_workers = min(num_workers, n_shards)
+    if effective_workers != num_workers:
+        print(
+            f"[dataloader] capping num_workers {num_workers} -> {effective_workers} "
+            f"(dataset n_shards={n_shards})"
+        )
+
     loader_kwargs = dict(
         batch_size=batch_size,
         collate_fn=_collate,
-        num_workers=num_workers,
+        num_workers=effective_workers,
         pin_memory=True,
     )
-    if num_workers > 0:
+    if effective_workers > 0:
+        # Larger prefetch helps when only a few workers are available: each
+        # worker buffers more batches so the GPU loop doesn't block on the
+        # next HF curl.
         loader_kwargs.update(
-            prefetch_factor=4,
+            prefetch_factor=8,
             persistent_workers=True,
         )
 
