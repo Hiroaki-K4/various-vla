@@ -167,7 +167,7 @@ def get_dataloader(
         else:  # "train"
             ds = ds.skip(val_size)
 
-        ds_list.append(_make_resilient(ds, name))
+        ds_list.append(ds)
 
     if not ds_list:
         raise RuntimeError(
