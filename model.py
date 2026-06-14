@@ -46,6 +46,34 @@ class VLAModel(nn.Module):
             nn.Linear(vision_dim, llm_dim), nn.GELU(), nn.Linear(llm_dim, llm_dim)
         ).to(device=device)
 
+        # Per-encoder image normalization stats. DINOv2 was pretrained with
+        # ImageNet mean/std; SigLIP was pretrained with mean=std=0.5. Applying
+        # the wrong (or no) normalization silently degrades the vision features
+        # because the input distribution no longer matches what the frozen
+        # backbones saw during pretraining. We expect the dataloader to hand us
+        # raw [0, 1] RGB tensors and do the normalization here so each encoder
+        # sees its native input space.
+        self.register_buffer(
+            "_dino_mean",
+            torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_dino_std",
+            torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_siglip_mean",
+            torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_siglip_std",
+            torch.tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1),
+            persistent=False,
+        )
+
         # Load checkpoint (all components at once)
         if checkpoint_path is not None:
             print(f"Loading checkpoint from {checkpoint_path}")
@@ -75,18 +103,22 @@ class VLAModel(nn.Module):
 
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
         """
-        images: (B, 3, 384, 384)  # SigLIP native size
+        images: (B, 3, 384, 384), raw RGB in [0, 1] (no normalization applied)
         returns: (B, N, vision_dim)  N = 27 * 27 = 729 patches
         """
-        # DINOv2 requires H, W divisible by patch_size=14 -> resize to 378
+        # DINOv2 requires H, W divisible by patch_size=14 -> resize to 378,
+        # then apply ImageNet normalization (DINOv2's pretraining stats).
         dino_input = F.interpolate(
             images, size=(378, 378), mode="bilinear", align_corners=False
         )
+        dino_input = (dino_input - self._dino_mean) / self._dino_std
         dino_out = self.dino.forward_features(dino_input)
         dino_feats = dino_out["x_norm_patchtokens"]  # (B, 729, 1024)
 
-        # SigLIP runs natively at 384 (floor(384/14)=27 patches per side)
-        siglip_feats = self.siglip.forward_features(images)  # (B, 729, 1152)
+        # SigLIP runs natively at 384 (floor(384/14)=27 patches per side) and
+        # was pretrained with mean=std=0.5 normalization.
+        siglip_input = (images - self._siglip_mean) / self._siglip_std
+        siglip_feats = self.siglip.forward_features(siglip_input)  # (B, 729, 1152)
 
         vision_feats = torch.cat([dino_feats, siglip_feats], dim=-1)  # (B, 729, 2176)
         return vision_feats

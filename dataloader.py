@@ -22,6 +22,7 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+
 # Disable webdataset's `check_empty` filter. By default it raises
 # `ValueError: No samples found in dataset; perhaps you have fewer shards than
 # workers.` whenever a single tar shard yields zero raw samples. With multi-
