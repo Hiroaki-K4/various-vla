@@ -56,7 +56,23 @@ def train(
 ):
     print("Loading models...")
     model = VLAModel(llm_model_name, device=device)
-    lora_config = LoraConfig(r=8, lora_alpha=32, target_modules=["q_proj", "v_proj"])
+    # Apply LoRA to all linear projections in the Llama transformer blocks
+    # (attention q/k/v/o + MLP gate/up/down). This is the standard recipe used
+    # by OpenVLA / LLaVA and gives noticeably more capacity than the default
+    # q_proj+v_proj-only setup.
+    lora_config = LoraConfig(
+        r=8,
+        lora_alpha=32,
+        target_modules=[
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
+    )
     model.llm = get_peft_model(model.llm, lora_config)
 
     model.llm.enable_input_require_grads()
