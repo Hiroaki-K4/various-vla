@@ -61,8 +61,8 @@ def train(
     # by OpenVLA / LLaVA and gives noticeably more capacity than the default
     # q_proj+v_proj-only setup.
     lora_config = LoraConfig(
-        r=8,
-        lora_alpha=32,
+        r=32,
+        lora_alpha=16,
         target_modules=[
             "q_proj",
             "k_proj",
