@@ -53,6 +53,8 @@ def train(
     device,
     save_model_path,
     gradient_accumulation_steps=1,
+    lora_r=8,
+    lora_alpha=32,
 ):
     print("Loading models...")
     model = VLAModel(llm_model_name, device=device)
@@ -61,8 +63,8 @@ def train(
     # by OpenVLA / LLaVA and gives noticeably more capacity than the default
     # q_proj+v_proj-only setup.
     lora_config = LoraConfig(
-        r=32,
-        lora_alpha=16,
+        r=lora_r,
+        lora_alpha=lora_alpha,
         target_modules=[
             "q_proj",
             "k_proj",
@@ -156,7 +158,9 @@ def train(
 
                 if patience_counter >= patience:
                     print("Early stopping triggered!")
-                    return
+                    return best_val_loss
+
+    return best_val_loss
 
 
 if __name__ == "__main__":
