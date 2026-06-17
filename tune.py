@@ -29,12 +29,13 @@ def objective(trial: optuna.Trial) -> float:
     # alpha is suggested as a multiplier of r so the ratio stays meaningful.
     alpha_multiplier = trial.suggest_categorical("alpha_multiplier", [0.5, 1, 2])
     lora_alpha = int(lora_r * alpha_multiplier)
+    lora_dropout = trial.suggest_float("lora_dropout", 0.0, 0.2)
 
     save_model_path = f"tune_trial_{trial.number}"
 
     print(
         f"\n[Trial {trial.number}] lr={lr_rate:.2e}  "
-        f"lora_r={lora_r}  lora_alpha={lora_alpha}"
+        f"lora_r={lora_r}  lora_alpha={lora_alpha}  lora_dropout={lora_dropout:.3f}"
     )
 
     val_loss = train(
@@ -50,6 +51,7 @@ def objective(trial: optuna.Trial) -> float:
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         lora_r=lora_r,
         lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
     )
 
     return val_loss

@@ -55,6 +55,7 @@ def train(
     gradient_accumulation_steps=1,
     lora_r=8,
     lora_alpha=32,
+    lora_dropout=0.0,
 ):
     print("Loading models...")
     model = VLAModel(llm_model_name, device=device)
@@ -65,15 +66,9 @@ def train(
     lora_config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
-        target_modules=[
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ],
+        lora_dropout=lora_dropout,
+        target_modules="all-linear",
+        init_lora_weights="gaussian",
     )
     model.llm = get_peft_model(model.llm, lora_config)
 
