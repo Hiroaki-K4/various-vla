@@ -132,21 +132,21 @@ def train(
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                     patience_counter = 0
-                    model.llm.save_pretrained(save_model_path)
-                    torch.save(
-                        model.projector.state_dict(),
-                        f"{save_model_path}_projector.pth",
-                    )
-                    torch.save(
-                        model.dino.state_dict(),
-                        f"{save_model_path}_dino.pth",
-                    )
-                    torch.save(
-                        model.siglip.state_dict(),
-                        f"{save_model_path}_siglip.pth",
-                    )
-
-                    print("New best model saved!")
+                    if save_model_path is not None:
+                        model.llm.save_pretrained(save_model_path)
+                        torch.save(
+                            model.projector.state_dict(),
+                            f"{save_model_path}_projector.pth",
+                        )
+                        torch.save(
+                            model.dino.state_dict(),
+                            f"{save_model_path}_dino.pth",
+                        )
+                        torch.save(
+                            model.siglip.state_dict(),
+                            f"{save_model_path}_siglip.pth",
+                        )
+                        print("New best model saved!")
                 else:
                     patience_counter += 1
                     print(f"No improvement. Patience: {patience_counter}/{patience}")

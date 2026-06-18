@@ -31,8 +31,6 @@ def objective(trial: optuna.Trial) -> float:
     lora_alpha = int(lora_r * alpha_multiplier)
     lora_dropout = trial.suggest_float("lora_dropout", 0.0, 0.2)
 
-    save_model_path = f"tune_trial_{trial.number}"
-
     print(
         f"\n[Trial {trial.number}] lr={lr_rate:.2e}  "
         f"lora_r={lora_r}  lora_alpha={lora_alpha}  lora_dropout={lora_dropout:.3f}"
@@ -47,7 +45,7 @@ def objective(trial: optuna.Trial) -> float:
         eval_interval=EVAL_INTERVAL,
         num_workers=NUM_WORKERS,
         device=DEVICE,
-        save_model_path=save_model_path,
+        save_model_path=None,
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         lora_r=lora_r,
         lora_alpha=lora_alpha,
