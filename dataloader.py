@@ -1,4 +1,5 @@
 import io
+import tarfile
 import time
 import warnings
 
@@ -203,7 +204,7 @@ def get_dataloader(
         else:  # "train"
             ds = ds.skip(val_size)
 
-        ds_list.append(ds)
+        ds_list.append(_make_resilient(ds, name))
 
     if not ds_list:
         raise RuntimeError(
@@ -382,7 +383,7 @@ def _make_resilient(
                 for ex in iter(ds):
                     yield ex
                 return  # iterator exhausted cleanly
-            except (OSError, IOError) as e:  # noqa: UP024 (IOError kept for clarity)
+            except (OSError, IOError, tarfile.ReadError) as e:  # noqa: UP024
                 retries += 1
                 if retries > max_retries:
                     print(
