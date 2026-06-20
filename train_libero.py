@@ -1,3 +1,4 @@
+import os
 import torch
 from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
@@ -109,6 +110,7 @@ def train(
             if (i + 1) % eval_interval == 0 and (
                 i + 1
             ) % gradient_accumulation_steps == 0:
+                torch.cuda.empty_cache()
                 val_loss = evaluate(model, val_loader, device)
                 print(f"\nStep {i + 1} | Val Loss: {val_loss:.4f}")
 
@@ -116,6 +118,7 @@ def train(
                     best_val_loss = val_loss
                     patience_counter = 0
                     if save_model_path is not None:
+                        os.makedirs(save_model_path, exist_ok=True)
                         model.llm.save_pretrained(save_model_path)
                         torch.save(
                             model.projector.state_dict(),
