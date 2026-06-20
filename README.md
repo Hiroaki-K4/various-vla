@@ -28,3 +28,16 @@ uv run huggingface-cli login  # required for Llama-3.2-1B
 ```bash
 uv run python <script>.py
 ```
+
+## Downloading LIBERO Datasets
+
+`libero_spatial` is already included. To download additional task suites:
+
+```bash
+cd libero/benchmark_scripts
+uv run python download_libero_datasets.py --datasets <suite>
+```
+
+`--datasets` options: `libero_spatial`, `libero_object`, `libero_goal`, `libero_100`, `all`
+
+Downloaded to `libero/libero/datasets/` by default.
