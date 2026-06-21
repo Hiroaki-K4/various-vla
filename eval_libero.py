@@ -65,12 +65,13 @@ def run_episode(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
     action_tokenizer: ActionTokenizer,
-    init_state: torch.Tensor,
+    init_state: np.ndarray,
     max_steps: int,
     device: torch.device,
     camera: str,
 ) -> bool:
-    obs = env.set_init_state(init_state.numpy())
+    init_state = np.asarray(init_state)
+    obs = env.set_init_state(init_state)
 
     # Warm up physics (same as LIBERO's official eval)
     for _ in range(5):
