@@ -2,7 +2,7 @@ import os
 import torch
 from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 from action_tokenizer import ActionTokenizer
 from libero_dataloader import get_libero_dataloader
@@ -27,6 +27,7 @@ def train(
     lora_dropout: float = 0.0,
     val_demos: int = 5,
     camera: str = "agentview_rgb",
+    warmup_ratio: float = 0.05,
 ):
     print("Loading models...")
     model = VLAModel(llm_model_name, device=device)
@@ -45,6 +46,7 @@ def train(
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr_rate)
     scaler = torch.amp.GradScaler("cuda")
+    _scheduler = None  # created after train_loader is built
 
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
     action_tokenizer = ActionTokenizer(tokenizer, n_bins=256)
@@ -74,6 +76,15 @@ def train(
         f"Train samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}"
     )
 
+    total_steps = (num_epochs * len(train_loader)) // gradient_accumulation_steps
+    warmup_steps = max(1, int(total_steps * warmup_ratio))
+    _scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
+    )
+    print(f"Scheduler: cosine warmup {warmup_steps} / {total_steps} steps")
+
     best_val_loss = float("inf")
     patience_counter = 0
 
@@ -102,6 +113,7 @@ def train(
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
+                _scheduler.step()
 
             pbar.set_postfix(
                 {"train_loss": f"{loss.item() * gradient_accumulation_steps:.4f}"}
