@@ -71,6 +71,7 @@ def run_episode(
     camera: str,
 ) -> bool:
     init_state = np.asarray(init_state)
+    env.reset()
     obs = env.set_init_state(init_state)
 
     # Warm up physics (same as LIBERO's official eval)
