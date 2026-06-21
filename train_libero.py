@@ -159,7 +159,7 @@ if __name__ == "__main__":
         dataset_dir="libero/libero/datasets/libero_spatial",
         llm_model_name="meta-llama/Llama-3.2-1B",
         batch_size=2,
-        num_epochs=1,
+        num_epochs=5,
         lr_rate=1e-5,
         patience=3,
         eval_interval=1000,
