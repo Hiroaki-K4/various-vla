@@ -135,8 +135,14 @@ def run_episode(
     camera: str,
     instruction: str = "",
     record: bool = False,
+    debug_steps: int = 0,
 ) -> tuple:
-    """Returns (success, frames). frames is an empty list when record=False."""
+    """Returns (success, frames). frames is an empty list when record=False.
+
+    debug_steps > 0: print the raw generated token ids and decoded action for
+    the first N steps. If the action is ~constant across visibly different
+    frames, the policy has collapsed to the dataset's marginal action.
+    """
     init_state = np.asarray(init_state)
     env.reset()
     obs = env.set_init_state(init_state)
@@ -159,6 +165,15 @@ def run_episode(
         action = action_tokenizer.decode_model_output(output_ids, action_dim=7)
         if action.ndim == 2:
             action = action[0]  # (7,)
+
+        if step < debug_steps:
+            ids = output_ids.detach().cpu().numpy().reshape(-1)
+            img_mean = float(raw_image.mean())  # cheap proxy that the input differs
+            np.set_printoptions(precision=3, suppress=True)
+            print(
+                f"    [debug] step {step:3d}  img_mean={img_mean:6.2f}  "
+                f"token_ids={ids}  action={action}"
+            )
 
         obs, _, done, _ = env.step(action)
         success = env.check_success()
@@ -185,6 +200,7 @@ def evaluate(
     save_video_flag: bool = False,
     video_dir: str = "eval_videos",
     video_mode: str = "all",
+    debug_actions: int = 0,
 ) -> float:
     model = load_model(model_path, llm_model_name, device)
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
@@ -243,6 +259,7 @@ def evaluate(
                 camera,
                 instruction=task.language,
                 record=record,
+                debug_steps=debug_actions if (task_id == 0 and ep == 0) else 0,
             )
             successes += int(success)
             status = "SUCCESS" if success else "FAIL"
@@ -327,6 +344,13 @@ if __name__ == "__main__":
         choices=["all", "fail", "first"],
         help="Which episodes to save: all / only failures / only first episode per task",
     )
+    parser.add_argument(
+        "--debug_actions",
+        type=int,
+        default=0,
+        help="Print token ids + decoded action for the first N steps of the first "
+        "episode (diagnose policy collapse: action ~constant across frames)",
+    )
     args = parser.parse_args()
 
     evaluate(
@@ -340,4 +364,5 @@ if __name__ == "__main__":
         save_video_flag=args.save_video,
         video_dir=args.video_dir,
         video_mode=args.video_mode,
+        debug_actions=args.debug_actions,
     )
