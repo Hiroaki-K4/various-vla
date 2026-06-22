@@ -26,10 +26,36 @@ uv run huggingface-cli login  # required for Llama-3.2-1B
 | `train_libero.py` | Train VLA on LIBERO data (`libero_spatial`, ~56k steps) |
 | `train.py` | Train VLA on OpenX-Embodiment (streamed from HuggingFace) |
 | `tune.py` | Hyperparameter search with Optuna |
+| `eval_libero.py` | Evaluate a trained checkpoint in LIBERO simulation |
 
 ```bash
 uv run python <script>.py
 ```
+
+## Evaluating in LIBERO
+
+```bash
+uv run python eval_libero.py --task_suite libero_spatial --n_episodes 10
+```
+
+Key options: `--model_path` (LoRA checkpoint dir, also expects `_projector.pth` / `_dino.pth` / `_siglip.pth` siblings), `--task_suite` (`libero_spatial`, `libero_object`, `libero_goal`, `libero_100`), `--n_episodes`, `--max_steps`, `--camera`.
+
+### Saving rollout videos
+
+Add `--save_video` to write mp4 rollouts with the task goal and step/status overlaid. Videos are saved to `<video_dir>/<task_suite>/task<ID>_ep<N>_<STATUS>.mp4`.
+
+```bash
+# All episodes (libero_spatial ≈ a few hundred MB)
+uv run python eval_libero.py --task_suite libero_spatial --save_video
+
+# Only failed episodes (debugging, small)
+uv run python eval_libero.py --task_suite libero_spatial --save_video --video_mode fail
+
+# Large suites: limit to one episode per task
+uv run python eval_libero.py --task_suite libero_100 --save_video --video_mode first
+```
+
+Video options: `--save_video` (off by default), `--video_dir` (default `eval_videos`), `--video_mode` (`all` / `fail` / `first`).
 
 ## Downloading LIBERO Datasets
 

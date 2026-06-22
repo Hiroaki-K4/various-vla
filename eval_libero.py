@@ -1,7 +1,10 @@
 import argparse
 import os
 import sys
+import textwrap
 
+import cv2
+import imageio
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -59,6 +62,67 @@ def preprocess_obs(obs_image: np.ndarray, device: torch.device) -> torch.Tensor:
     return image.to(device)
 
 
+def annotate_frame(
+    frame: np.ndarray,
+    instruction: str,
+    step: int,
+    max_steps: int,
+    success: bool,
+    out_size: int = 512,
+) -> np.ndarray:
+    """Upscale a raw obs frame and draw the task goal + status banner on it.
+
+    The LIBERO agentview image is stored upside-down, so it is flipped here.
+    """
+    # Flip vertically (agentview is rendered upside-down) and upscale for readability.
+    frame = frame[::-1]
+    frame = cv2.resize(frame, (out_size, out_size), interpolation=cv2.INTER_NEAREST)
+
+    # Bottom banner holding the (possibly wrapped) instruction text.
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.5
+    thickness = 1
+    line_h = 22
+    lines = textwrap.wrap(f"Goal: {instruction}", width=48) or ["Goal:"]
+    banner_h = line_h * len(lines) + 12
+    banner = np.zeros((banner_h, out_size, 3), dtype=np.uint8)
+    for i, line in enumerate(lines):
+        cv2.putText(
+            banner,
+            line,
+            (8, line_h * (i + 1)),
+            font,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+
+    # Top-left overlay: step counter and success status.
+    status = "SUCCESS" if success else "running"
+    color = (0, 255, 0) if success else (0, 200, 255)
+    cv2.putText(
+        frame,
+        f"step {step}/{max_steps}  {status}",
+        (8, 22),
+        font,
+        font_scale,
+        color,
+        thickness,
+        cv2.LINE_AA,
+    )
+
+    return np.concatenate([frame, banner], axis=0)
+
+
+def save_video(frames: list, path: str, fps: int = 20) -> None:
+    if not frames:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    imageio.mimsave(path, frames, fps=fps, macro_block_size=None)
+    print(f"  saved video: {path}")
+
+
 def run_episode(
     env: OffScreenRenderEnv,
     model: VLAModel,
@@ -69,7 +133,10 @@ def run_episode(
     max_steps: int,
     device: torch.device,
     camera: str,
-) -> bool:
+    instruction: str = "",
+    record: bool = False,
+) -> tuple:
+    """Returns (success, frames). frames is an empty list when record=False."""
     init_state = np.asarray(init_state)
     env.reset()
     obs = env.set_init_state(init_state)
@@ -78,8 +145,11 @@ def run_episode(
     for _ in range(5):
         obs, _, _, _ = env.step(np.zeros(7))
 
-    for _ in range(max_steps):
-        image = preprocess_obs(obs[f"{camera}_image"], device)
+    frames: list = []
+    success = False
+    for step in range(max_steps):
+        raw_image = obs[f"{camera}_image"]
+        image = preprocess_obs(raw_image, device)
 
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.float16):
             output_ids = model.generate(
@@ -91,13 +161,17 @@ def run_episode(
             action = action[0]  # (7,)
 
         obs, _, done, _ = env.step(action)
+        success = env.check_success()
 
-        if env.check_success():
-            return True
-        if done:
+        if record:
+            frames.append(
+                annotate_frame(raw_image, instruction, step + 1, max_steps, success)
+            )
+
+        if success or done:
             break
 
-    return env.check_success()
+    return success, frames
 
 
 def evaluate(
@@ -108,6 +182,9 @@ def evaluate(
     max_steps: int,
     device: torch.device,
     camera: str = "agentview",
+    save_video_flag: bool = False,
+    video_dir: str = "eval_videos",
+    video_mode: str = "all",
 ) -> float:
     model = load_model(model_path, llm_model_name, device)
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
@@ -152,7 +229,9 @@ def evaluate(
         successes = 0
         for ep in range(n_episodes):
             init_state = init_states[ep % len(init_states)]
-            success = run_episode(
+            # "first": only the first episode; "fail"/"all": record then decide.
+            record = save_video_flag and (video_mode != "first" or ep == 0)
+            success, frames = run_episode(
                 env,
                 model,
                 input_ids,
@@ -162,6 +241,8 @@ def evaluate(
                 max_steps,
                 device,
                 camera,
+                instruction=task.language,
+                record=record,
             )
             successes += int(success)
             status = "SUCCESS" if success else "FAIL"
@@ -169,6 +250,10 @@ def evaluate(
                 f"  Task {task_id:2d} ep {ep + 1:2d}/{n_episodes}  {status}"
                 f"  [{task.language[:60]}]"
             )
+
+            if record and (video_mode != "fail" or not success):
+                fname = f"task{task_id:02d}_ep{ep + 1:02d}_{status}.mp4"
+                save_video(frames, os.path.join(video_dir, task_suite_name, fname))
 
         rate = successes / n_episodes
         print(
@@ -224,6 +309,24 @@ if __name__ == "__main__":
         help="Camera name (obs key will be {camera}_image)",
     )
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument(
+        "--save_video",
+        action="store_true",
+        help="Save rollout videos (mp4) with the task goal overlaid",
+    )
+    parser.add_argument(
+        "--video_dir",
+        type=str,
+        default="eval_videos",
+        help="Directory to write videos into (subfoldered per task suite)",
+    )
+    parser.add_argument(
+        "--video_mode",
+        type=str,
+        default="all",
+        choices=["all", "fail", "first"],
+        help="Which episodes to save: all / only failures / only first episode per task",
+    )
     args = parser.parse_args()
 
     evaluate(
@@ -234,4 +337,7 @@ if __name__ == "__main__":
         max_steps=args.max_steps,
         device=torch.device(args.device),
         camera=args.camera,
+        save_video_flag=args.save_video,
+        video_dir=args.video_dir,
+        video_mode=args.video_mode,
     )
