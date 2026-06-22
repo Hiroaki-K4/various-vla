@@ -5,3 +5,4 @@ best_vla_model/
 *.png
 *.pt
 .pth
+eval_videos/
