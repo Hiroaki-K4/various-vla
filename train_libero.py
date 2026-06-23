@@ -33,6 +33,12 @@ def train(
     print("Loading models...")
     model = VLAModel(llm_model_name, device=device)
 
+    # Freeze vision encoders (DINOv2 + SigLIP): keep pretrained features fixed
+    for p in model.dino.parameters():
+        p.requires_grad = False
+    for p in model.siglip.parameters():
+        p.requires_grad = False
+
     lora_config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -90,6 +96,9 @@ def train(
     patience_counter = 0
 
     model.train()
+    # Frozen vision encoders stay in eval mode (no dropout / norm-stat updates)
+    model.dino.eval()
+    model.siglip.eval()
     print("Starting training...")
 
     for epoch in range(num_epochs):
@@ -150,8 +159,10 @@ def train(
 
                 if patience_counter >= patience:
                     print("Early stopping triggered!")
+                    print(f"Best Val Loss: {best_val_loss:.4f}")
                     return best_val_loss
 
+    print(f"Training finished. Best Val Loss: {best_val_loss:.4f}")
     return best_val_loss
 
 
@@ -161,7 +172,7 @@ if __name__ == "__main__":
         llm_model_name="meta-llama/Llama-3.2-1B",
         batch_size=2,
         num_epochs=5,
-        lr_rate=1e-4,
+        lr_rate=1e-5,
         patience=3,
         eval_interval=1000,
         num_workers=4,

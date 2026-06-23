@@ -15,6 +15,13 @@ from action_tokenizer import ActionTokenizer
 IMAGE_SIZE = (384, 384)
 PROMPT_TEMPLATE = "In: What action should the robot take to {instruction}?\nOut:"
 
+# Threshold below which an action's translation/rotation is treated as "no motion".
+NOOP_THRESH = 1e-3
+
+# Wrist camera(s) are already upright; only the third-person view is upside down
+# on our setup, so we rotate everything except these by 180 degrees.
+WRIST_CAMERAS = ("eye_in_hand_rgb",)
+
 
 class LiberoDataset(Dataset):
     """
@@ -51,6 +58,9 @@ class LiberoDataset(Dataset):
         self.tokenizer = tokenizer
         self.action_tokenizer = action_tokenizer
         self.camera = camera
+        # LIBERO third-person images come in upside down on our hardware; rotate
+        # them 180 degrees (paper point #3). Wrist images are left as-is.
+        self.rotate_180 = camera not in WRIST_CAMERAS
 
         # Build flat index: list of (hdf5_path, demo_key, step_idx, instruction)
         self.samples: list[tuple[str, str, int, str]] = []
@@ -71,8 +81,18 @@ class LiberoDataset(Dataset):
                 )
 
                 for demo_key in use_keys:
-                    n_steps = f["data"][demo_key]["actions"].shape[0]
+                    actions = f["data"][demo_key]["actions"][:]  # (T, 7)
+                    n_steps = actions.shape[0]
+                    prev_gripper = None
                     for step in range(n_steps):
+                        a = actions[step]
+                        # a[:6] = translation (3) + rotation (3), a[6] = gripper
+                        moving = np.abs(a[:6]).max() > NOOP_THRESH
+                        gripper_change = prev_gripper is None or a[6] != prev_gripper
+                        prev_gripper = a[6]
+                        # Drop "no-op" steps: no motion AND no gripper state change.
+                        if not moving and not gripper_change:
+                            continue
                         self.samples.append((hdf5_path, demo_key, step, instruction))
 
     def __len__(self) -> int:
@@ -87,8 +107,14 @@ class LiberoDataset(Dataset):
             image_np = f["data"][demo_key]["obs"][self.camera][step]  # (H, W, 3) uint8
             action_np = f["data"][demo_key]["actions"][step].astype(np.float32)  # (7,)
 
+        if self.rotate_180:
+            image_np = np.rot90(image_np, k=2)  # (H, W, 3), flip upside down
+
         # (H, W, 3) uint8  →  (3, 384, 384) float32 in [0, 1]
-        image = torch.from_numpy(image_np).permute(2, 0, 1).float() / 255.0
+        image = (
+            torch.from_numpy(np.ascontiguousarray(image_np)).permute(2, 0, 1).float()
+            / 255.0
+        )
         image = F.interpolate(
             image.unsqueeze(0), size=IMAGE_SIZE, mode="bilinear", align_corners=False
         ).squeeze(0)

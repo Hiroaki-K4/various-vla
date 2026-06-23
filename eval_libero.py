@@ -54,8 +54,16 @@ def load_model(model_path: str, llm_model_name: str, device: torch.device) -> VL
 
 
 def preprocess_obs(obs_image: np.ndarray, device: torch.device) -> torch.Tensor:
-    """(H, W, 3) uint8 → (1, 3, 384, 384) float32 in [0, 1]"""
-    image = torch.from_numpy(obs_image).permute(2, 0, 1).float() / 255.0
+    """(H, W, 3) uint8 → (1, 3, 384, 384) float32 in [0, 1]
+
+    The agentview image is rendered upside down; rotate 180 degrees to match the
+    orientation the model was trained on (see libero_dataloader.rotate_180).
+    """
+    obs_image = np.rot90(obs_image, k=2)
+    image = (
+        torch.from_numpy(np.ascontiguousarray(obs_image)).permute(2, 0, 1).float()
+        / 255.0
+    )
     image = F.interpolate(
         image.unsqueeze(0), size=IMAGE_SIZE, mode="bilinear", align_corners=False
     )
@@ -72,10 +80,11 @@ def annotate_frame(
 ) -> np.ndarray:
     """Upscale a raw obs frame and draw the task goal + status banner on it.
 
-    The LIBERO agentview image is stored upside-down, so it is flipped here.
+    The agentview image is rendered upside-down; rotate 180 degrees so the video
+    shows the same orientation the model is fed (see preprocess_obs).
     """
-    # Flip vertically (agentview is rendered upside-down) and upscale for readability.
-    frame = frame[::-1]
+    # Rotate 180 deg (matches preprocess_obs / training) and upscale for readability.
+    frame = np.ascontiguousarray(np.rot90(frame, k=2))
     frame = cv2.resize(frame, (out_size, out_size), interpolation=cv2.INTER_NEAREST)
 
     # Bottom banner holding the (possibly wrapped) instruction text.
