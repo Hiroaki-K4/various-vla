@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizerBase
 
+from action_normalizer import ActionNormalizer
 from action_tokenizer import ActionTokenizer
 
 IMAGE_SIZE = (384, 384)
@@ -50,6 +51,7 @@ class LiberoDataset(Dataset):
         split: str = "train",
         val_demos: int = 5,
         camera: str = "agentview_rgb",
+        action_normalizer: ActionNormalizer | None = None,
     ):
         assert split in (
             "train",
@@ -57,6 +59,7 @@ class LiberoDataset(Dataset):
         ), f"split must be 'train' or 'val', got {split!r}"
         self.tokenizer = tokenizer
         self.action_tokenizer = action_tokenizer
+        self.action_normalizer = action_normalizer
         self.camera = camera
         # LIBERO third-person images come in upside down on our hardware; rotate
         # them 180 degrees (paper point #3). Wrist images are left as-is.
@@ -119,6 +122,11 @@ class LiberoDataset(Dataset):
             image.unsqueeze(0), size=IMAGE_SIZE, mode="bilinear", align_corners=False
         ).squeeze(0)
 
+        # Normalize raw action to [-1, 1] (q01/q99, gripper left raw) so the 256
+        # bins cover the useful range instead of collapsing into the center.
+        if self.action_normalizer is not None:
+            action_np = self.action_normalizer.normalize(action_np)
+
         # Tokenize continuous action (7,) → token ids (7,)
         action_token_ids = torch.tensor(
             self.action_tokenizer.tokenize(action_np), dtype=torch.long
@@ -171,6 +179,7 @@ def get_libero_dataloader(
     num_workers: int = 0,
     val_demos: int = 5,
     camera: str = "agentview_rgb",
+    action_normalizer: ActionNormalizer | None = None,
 ) -> DataLoader:
     """
     Args:
@@ -185,6 +194,7 @@ def get_libero_dataloader(
         split=split,
         val_demos=val_demos,
         camera=camera,
+        action_normalizer=action_normalizer,
     )
     pad_id = (
         tokenizer.pad_token_id

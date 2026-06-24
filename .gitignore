@@ -6,4 +6,4 @@ best_vla_model/
 *.pt
 .pth
 eval_videos/
-
+*.json

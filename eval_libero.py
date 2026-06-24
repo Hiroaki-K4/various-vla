@@ -19,6 +19,7 @@ for _i, _finder in enumerate(sys.meta_path):
         sys.meta_path.insert(0, sys.meta_path.pop(_i))
         break
 
+from action_normalizer import ActionNormalizer
 from action_tokenizer import ActionTokenizer
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
@@ -145,6 +146,7 @@ def run_episode(
     instruction: str = "",
     record: bool = False,
     debug_steps: int = 0,
+    action_normalizer: ActionNormalizer | None = None,
 ) -> tuple:
     """Returns (success, frames). frames is an empty list when record=False.
 
@@ -174,6 +176,11 @@ def run_episode(
         action = action_tokenizer.decode_model_output(output_ids, action_dim=7)
         if action.ndim == 2:
             action = action[0]  # (7,)
+
+        # Map normalized [-1, 1] prediction back to raw action space the env
+        # expects (must match the q01/q99 normalization used during training).
+        if action_normalizer is not None:
+            action = action_normalizer.denormalize(action)
 
         if step < debug_steps:
             ids = output_ids.detach().cpu().numpy().reshape(-1)
@@ -214,6 +221,19 @@ def evaluate(
     model = load_model(model_path, llm_model_name, device)
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
     action_tokenizer = ActionTokenizer(tokenizer, n_bins=256)
+
+    # Load the q01/q99 action stats saved during training so predictions are
+    # denormalized back to the env's raw action space.
+    stats_path = f"{model_path}_action_stats.json"
+    if os.path.exists(stats_path):
+        action_normalizer = ActionNormalizer.load(stats_path)
+        print(f"Loaded action stats from {stats_path}")
+    else:
+        action_normalizer = None
+        print(
+            f"WARNING: {stats_path} not found; running without action "
+            "denormalization (predictions assumed already in raw space)."
+        )
 
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[task_suite_name]()
@@ -269,6 +289,7 @@ def evaluate(
                 instruction=task.language,
                 record=record,
                 debug_steps=debug_actions if (task_id == 0 and ep == 0) else 0,
+                action_normalizer=action_normalizer,
             )
             successes += int(success)
             status = "SUCCESS" if success else "FAIL"

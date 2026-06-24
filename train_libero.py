@@ -5,6 +5,7 @@ from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
+from action_normalizer import compute_action_stats
 from action_tokenizer import ActionTokenizer
 from libero_dataloader import get_libero_dataloader
 from model import VLAModel
@@ -58,6 +59,18 @@ def train(
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
     action_tokenizer = ActionTokenizer(tokenizer, n_bins=256)
 
+    # OpenVLA-style q01/q99 action normalization. Compute stats from the train
+    # split and save next to the checkpoint so eval can denormalize identically.
+    print("Computing action normalization stats (q01/q99)...")
+    action_normalizer = compute_action_stats(
+        dataset_dir=dataset_dir, split="train", val_demos=val_demos
+    )
+    print(action_normalizer)
+    if save_model_path is not None:
+        stats_path = f"{save_model_path}_action_stats.json"
+        action_normalizer.save(stats_path)
+        print(f"Saved action stats to {stats_path}")
+
     train_loader = get_libero_dataloader(
         dataset_dir=dataset_dir,
         tokenizer=tokenizer,
@@ -67,6 +80,7 @@ def train(
         num_workers=num_workers,
         val_demos=val_demos,
         camera=camera,
+        action_normalizer=action_normalizer,
     )
     val_loader = get_libero_dataloader(
         dataset_dir=dataset_dir,
@@ -77,6 +91,7 @@ def train(
         num_workers=num_workers,
         val_demos=val_demos,
         camera=camera,
+        action_normalizer=action_normalizer,
     )
 
     print(
