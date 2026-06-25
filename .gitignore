@@ -7,3 +7,4 @@ best_vla_model/
 .pth
 eval_videos/
 *.json
+*.db

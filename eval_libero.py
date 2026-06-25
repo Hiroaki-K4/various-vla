@@ -256,8 +256,8 @@ def evaluate(
         env = OffScreenRenderEnv(
             bddl_file_name=task_bddl_file,
             camera_names=[camera],
-            camera_heights=128,
-            camera_widths=128,
+            camera_heights=384,
+            camera_widths=384,
             use_camera_obs=True,
         )
         env.seed(0)
