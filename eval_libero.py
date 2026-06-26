@@ -146,6 +146,7 @@ def run_episode(
     instruction: str = "",
     record: bool = False,
     debug_steps: int = 0,
+    debug_every: int = 0,
     action_normalizer: ActionNormalizer | None = None,
 ) -> tuple:
     """Returns (success, frames). frames is an empty list when record=False.
@@ -153,6 +154,12 @@ def run_episode(
     debug_steps > 0: print the raw generated token ids and decoded action for
     the first N steps. If the action is ~constant across visibly different
     frames, the policy has collapsed to the dataset's marginal action.
+
+    debug_every > 0: additionally print the full 7-dim action every N steps for
+    the whole episode (xyz/rpy deltas + gripper). Use this to inspect the slow
+    region near the object: if the xyz deltas collapse to ~0 or the gripper
+    (dim 6) never swings toward close, the policy is stalling instead of
+    finishing the grasp.
     """
     init_state = np.asarray(init_state)
     env.reset()
@@ -190,6 +197,14 @@ def run_episode(
                 f"    [debug] step {step:3d}  img_mean={img_mean:6.2f}  "
                 f"token_ids={ids}  action={action}"
             )
+        elif debug_every > 0 and step % debug_every == 0:
+            # Full action across the whole episode to inspect the slow region.
+            np.set_printoptions(precision=3, suppress=True)
+            xyz_mag = float(np.abs(action[:3]).max())
+            print(
+                f"    [debug] step {step:3d}  xyz={action[:3]}  rpy={action[3:6]}  "
+                f"grip={action[6]:+.3f}  |xyz|max={xyz_mag:.3f}"
+            )
 
         obs, _, done, _ = env.step(action)
         success = env.check_success()
@@ -217,6 +232,7 @@ def evaluate(
     video_dir: str = "eval_videos",
     video_mode: str = "all",
     debug_actions: int = 0,
+    debug_every: int = 0,
 ) -> float:
     model = load_model(model_path, llm_model_name, device)
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
@@ -290,6 +306,7 @@ def evaluate(
                 instruction=task.language,
                 record=record,
                 debug_steps=debug_actions if (task_id == 0 and ep == 0) else 0,
+                debug_every=debug_every if (task_id == 0 and ep == 0) else 0,
                 action_normalizer=action_normalizer,
             )
             successes += int(success)
@@ -382,6 +399,14 @@ if __name__ == "__main__":
         help="Print token ids + decoded action for the first N steps of the first "
         "episode (diagnose policy collapse: action ~constant across frames)",
     )
+    parser.add_argument(
+        "--debug_every",
+        type=int,
+        default=0,
+        help="Print the full 7-dim action every N steps for the whole first "
+        "episode (inspect the slow region near the object: xyz deltas collapsing "
+        "to ~0 or the gripper never closing)",
+    )
     args = parser.parse_args()
 
     evaluate(
@@ -396,4 +421,5 @@ if __name__ == "__main__":
         video_dir=args.video_dir,
         video_mode=args.video_mode,
         debug_actions=args.debug_actions,
+        debug_every=args.debug_every,
     )

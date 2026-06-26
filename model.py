@@ -190,11 +190,18 @@ class VLAModel(nn.Module):
             images, input_ids, attention_mask
         )
 
+        # Pass pad_token_id explicitly so HF doesn't log
+        # "Setting `pad_token_id` to `eos_token_id`..." on every call.
+        eos_token_id = self.llm.config.eos_token_id
+        if isinstance(eos_token_id, (list, tuple)):
+            eos_token_id = eos_token_id[0]
+
         output_ids = self.llm.generate(
             inputs_embeds=input_embeds,
             attention_mask=full_mask,
             max_new_tokens=max_new_tokens,
             do_sample=False,
+            pad_token_id=eos_token_id,
         )
         return output_ids
 
