@@ -259,6 +259,7 @@ def evaluate(
             camera_heights=384,
             camera_widths=384,
             use_camera_obs=True,
+            ignore_done=True,
         )
         env.seed(0)
         env.reset()
