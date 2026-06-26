@@ -346,7 +346,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_steps",
         type=int,
-        default=600,
+        default=1000,
         help="Max steps per episode (LIBERO default horizon is 1000)",
     )
     parser.add_argument(
