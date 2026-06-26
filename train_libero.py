@@ -195,7 +195,7 @@ if __name__ == "__main__":
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         save_model_path="checkpoints/libero_spatial",
         gradient_accumulation_steps=2,
-        lora_r=8,
-        lora_alpha=32,
+        lora_r=32,
+        lora_alpha=128,
         val_demos=5,
     )
