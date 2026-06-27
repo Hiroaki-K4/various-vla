@@ -17,7 +17,8 @@ IMAGE_SIZE = (384, 384)
 PROMPT_TEMPLATE = "In: What action should the robot take to {instruction}?\nOut:"
 
 # Threshold below which an action's translation/rotation is treated as "no motion".
-NOOP_THRESH = 1e-3
+# Matches the OpenVLA paper's `is_noop`: L2 norm of the non-gripper dims < 1e-4.
+NOOP_THRESH = 1e-4
 
 # Wrist camera(s) are already upright; only the third-person view is upside down
 # on our setup, so we rotate everything except these by 180 degrees.
@@ -90,7 +91,7 @@ class LiberoDataset(Dataset):
                     for step in range(n_steps):
                         a = actions[step]
                         # a[:6] = translation (3) + rotation (3), a[6] = gripper
-                        moving = np.abs(a[:6]).max() > NOOP_THRESH
+                        moving = np.linalg.norm(a[:6]) >= NOOP_THRESH
                         gripper_change = prev_gripper is None or a[6] != prev_gripper
                         prev_gripper = a[6]
                         # Drop "no-op" steps: no motion AND no gripper state change.

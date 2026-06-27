@@ -76,7 +76,7 @@ def compute_action_stats(
     dataset_dir: str,
     split: str = "train",
     val_demos: int = 5,
-    noop_thresh: float = 1e-3,
+    noop_thresh: float = 1e-4,
     gripper_dim: int = 6,
 ) -> ActionNormalizer:
     """Compute q01/q99 over the (no-op filtered) split, matching the dataloader.
@@ -99,7 +99,7 @@ def compute_action_stats(
                 prev_gripper = None
                 for step in range(actions.shape[0]):
                     a = actions[step]
-                    moving = np.abs(a[:6]).max() > noop_thresh
+                    moving = np.linalg.norm(a[:6]) >= noop_thresh
                     gripper_change = prev_gripper is None or a[6] != prev_gripper
                     prev_gripper = a[6]
                     if not moving and not gripper_change:
