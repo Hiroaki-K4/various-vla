@@ -1,5 +1,7 @@
 import os
+import random
 
+import numpy as np
 import torch
 from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
@@ -10,6 +12,14 @@ from action_tokenizer import ActionTokenizer
 from libero_dataloader import get_libero_dataloader
 from model import VLAModel
 from train import evaluate
+
+
+def set_seed(seed: int) -> None:
+    """Seed Python, NumPy and PyTorch (CPU + CUDA) for reproducible runs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 def train(
@@ -30,7 +40,11 @@ def train(
     val_demos: int = 5,
     camera: str = "agentview_rgb",
     warmup_ratio: float = 0.05,
+    seed: int = 42,
 ):
+    set_seed(seed)
+    print(f"Random seed set to {seed}")
+
     print("Loading models...")
     model = VLAModel(llm_model_name, device=device)
 
@@ -81,6 +95,7 @@ def train(
         val_demos=val_demos,
         camera=camera,
         action_normalizer=action_normalizer,
+        seed=seed,
     )
     val_loader = get_libero_dataloader(
         dataset_dir=dataset_dir,

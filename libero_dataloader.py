@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import random
 from functools import partial
 
 import h5py
@@ -181,12 +182,14 @@ def get_libero_dataloader(
     val_demos: int = 5,
     camera: str = "agentview_rgb",
     action_normalizer: ActionNormalizer | None = None,
+    seed: int | None = None,
 ) -> DataLoader:
     """
     Args:
         dataset_dir: path to a libero task-suite directory, e.g.
                      "libero/libero/datasets/libero_spatial"
         val_demos:   first N demos per HDF5 file reserved for validation.
+        seed:        if set, makes shuffling and worker RNG reproducible.
     """
     dataset = LiberoDataset(
         dataset_dir=dataset_dir,
@@ -204,6 +207,18 @@ def get_libero_dataloader(
     )
     collate = partial(_collate_fn, pad_token_id=pad_id)
 
+    # Reproducible shuffling and per-worker RNG when a seed is provided.
+    generator = None
+    worker_init_fn = None
+    if seed is not None:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
+        def worker_init_fn(worker_id: int) -> None:
+            worker_seed = seed + worker_id
+            np.random.seed(worker_seed)
+            random.seed(worker_seed)
+
     return DataLoader(
         dataset,
         batch_size=batch_size,
@@ -211,4 +226,6 @@ def get_libero_dataloader(
         num_workers=num_workers,
         collate_fn=collate,
         pin_memory=True,
+        generator=generator,
+        worker_init_fn=worker_init_fn,
     )
