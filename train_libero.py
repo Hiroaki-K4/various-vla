@@ -200,7 +200,7 @@ if __name__ == "__main__":
     train(
         # dataset_dir="libero/libero/datasets/libero_spatial",
         dataset_dir="libero/libero/datasets/libero_spatial_384",
-        llm_model_name="meta-llama/Llama-3.2-1B",
+        llm_model_name="meta-llama/Llama-3.2-3B",
         batch_size=2,
         num_epochs=5,
         lr_rate=1e-5,
@@ -209,7 +209,7 @@ if __name__ == "__main__":
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
         save_model_path="checkpoints/libero_spatial",
-        gradient_accumulation_steps=8,
+        gradient_accumulation_steps=2,
         lora_r=32,
         lora_alpha=128,
         val_demos=5,

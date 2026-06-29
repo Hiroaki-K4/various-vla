@@ -347,7 +347,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--llm_model_name",
         type=str,
-        default="meta-llama/Llama-3.2-1B",
+        default="meta-llama/Llama-3.2-3B",
     )
     parser.add_argument(
         "--task_suite",
