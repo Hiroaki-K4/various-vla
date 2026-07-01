@@ -8,3 +8,5 @@ best_vla_model/
 eval_videos/
 *.json
 *.db
+dataset_videos/
+scratch_*/

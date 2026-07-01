@@ -38,7 +38,7 @@ def train(
     lora_alpha: int = 32,
     lora_dropout: float = 0.0,
     val_demos: int = 5,
-    camera: str = "agentview_rgb",
+    cameras: tuple[str, ...] = ("agentview_rgb",),
     warmup_ratio: float = 0.05,
     seed: int = 42,
 ):
@@ -93,7 +93,7 @@ def train(
         split="train",
         num_workers=num_workers,
         val_demos=val_demos,
-        camera=camera,
+        cameras=cameras,
         action_normalizer=action_normalizer,
         seed=seed,
     )
@@ -105,7 +105,7 @@ def train(
         split="val",
         num_workers=num_workers,
         val_demos=val_demos,
-        camera=camera,
+        cameras=cameras,
         action_normalizer=action_normalizer,
     )
 
@@ -213,4 +213,6 @@ if __name__ == "__main__":
         lora_r=32,
         lora_alpha=128,
         val_demos=5,
+        # Two-view input (OpenVLA-OFT recipe): third-person + wrist camera.
+        cameras=("agentview_rgb", "eye_in_hand_rgb"),
     )

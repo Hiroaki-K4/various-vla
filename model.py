@@ -103,9 +103,24 @@ class VLAModel(nn.Module):
 
     def encode_image(self, images: torch.Tensor) -> torch.Tensor:
         """
-        images: (B, 3, 384, 384), raw RGB in [0, 1] (no normalization applied)
-        returns: (B, N, vision_dim)  N = 27 * 27 = 729 patches
+        images: (B, 3, 384, 384) single view, or (B, V, 3, 384, 384) multi-view,
+                raw RGB in [0, 1] (no normalization applied).
+        returns: (B, V*N, vision_dim)  N = 27 * 27 = 729 patches per view.
+
+        Multi-view (e.g. third-person + wrist camera) is encoded by running each
+        view through the frozen backbones independently and concatenating their
+        patch tokens along the sequence dimension, matching the OpenVLA-OFT recipe
+        (the projected tokens simply become a longer image-token prefix).
         """
+        if images.dim() == 5:
+            B, V = images.shape[:2]
+            flat = images.reshape(B * V, *images.shape[2:])  # (B*V, 3, H, W)
+            feats = self._encode_view(flat)  # (B*V, N, vision_dim)
+            return feats.reshape(B, V * feats.shape[1], feats.shape[2])
+        return self._encode_view(images)
+
+    def _encode_view(self, images: torch.Tensor) -> torch.Tensor:
+        """Encode a single view: (B, 3, 384, 384) -> (B, 729, vision_dim)."""
         # DINOv2 requires H, W divisible by patch_size=14 -> resize to 378,
         # then apply ImageNet normalization (DINOv2's pretraining stats).
         dino_input = F.interpolate(

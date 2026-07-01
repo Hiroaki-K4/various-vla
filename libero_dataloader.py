@@ -52,20 +52,24 @@ class LiberoDataset(Dataset):
         action_tokenizer: ActionTokenizer,
         split: str = "train",
         val_demos: int = 5,
-        camera: str = "agentview_rgb",
+        cameras: tuple[str, ...] = ("agentview_rgb",),
         action_normalizer: ActionNormalizer | None = None,
     ):
         assert split in (
             "train",
             "val",
         ), f"split must be 'train' or 'val', got {split!r}"
+        assert len(cameras) >= 1, "at least one camera is required"
         self.tokenizer = tokenizer
         self.action_tokenizer = action_tokenizer
         self.action_normalizer = action_normalizer
-        self.camera = camera
+        # One or more camera views (e.g. third-person + wrist). Each view is
+        # encoded independently and its patch tokens are concatenated downstream.
+        self.cameras = tuple(cameras)
         # LIBERO third-person images come in upside down on our hardware; rotate
-        # them 180 degrees (paper point #3). Wrist images are left as-is.
-        self.rotate_180 = camera not in WRIST_CAMERAS
+        # them 180 degrees. Wrist images are already upright, so they are left
+        # as-is. Rotation is decided per view.
+        self.rotate_180 = tuple(cam not in WRIST_CAMERAS for cam in self.cameras)
 
         # Build flat index: list of (hdf5_path, demo_key, step_idx, instruction)
         self.samples: list[tuple[str, str, int, str]] = []
@@ -108,21 +112,31 @@ class LiberoDataset(Dataset):
 
         # Open per call — safe for DataLoader multiprocessing (h5py handles
         # are not picklable, so we cannot hold one open across worker forks).
+        view_imgs = []
         with h5py.File(hdf5_path, "r") as f:
-            image_np = f["data"][demo_key]["obs"][self.camera][step]  # (H, W, 3) uint8
+            obs = f["data"][demo_key]["obs"]
+            for cam, rotate in zip(self.cameras, self.rotate_180):
+                image_np = obs[cam][step]  # (H, W, 3) uint8
+                if rotate:
+                    image_np = np.rot90(image_np, k=2)  # flip upside down
+                # (H, W, 3) uint8  →  (3, 384, 384) float32 in [0, 1]
+                img = (
+                    torch.from_numpy(np.ascontiguousarray(image_np))
+                    .permute(2, 0, 1)
+                    .float()
+                    / 255.0
+                )
+                img = F.interpolate(
+                    img.unsqueeze(0),
+                    size=IMAGE_SIZE,
+                    mode="bilinear",
+                    align_corners=False,
+                ).squeeze(0)
+                view_imgs.append(img)
             action_np = f["data"][demo_key]["actions"][step].astype(np.float32)  # (7,)
 
-        if self.rotate_180:
-            image_np = np.rot90(image_np, k=2)  # (H, W, 3), flip upside down
-
-        # (H, W, 3) uint8  →  (3, 384, 384) float32 in [0, 1]
-        image = (
-            torch.from_numpy(np.ascontiguousarray(image_np)).permute(2, 0, 1).float()
-            / 255.0
-        )
-        image = F.interpolate(
-            image.unsqueeze(0), size=IMAGE_SIZE, mode="bilinear", align_corners=False
-        ).squeeze(0)
+        # (V, 3, 384, 384) — one entry per camera view.
+        image = torch.stack(view_imgs, dim=0)
 
         # Normalize raw action to [-1, 1] (q01/q99, gripper left raw) so the 256
         # bins cover the useful range instead of collapsing into the center.
@@ -180,7 +194,7 @@ def get_libero_dataloader(
     split: str = "train",
     num_workers: int = 0,
     val_demos: int = 5,
-    camera: str = "agentview_rgb",
+    cameras: tuple[str, ...] = ("agentview_rgb",),
     action_normalizer: ActionNormalizer | None = None,
     seed: int | None = None,
 ) -> DataLoader:
@@ -197,7 +211,7 @@ def get_libero_dataloader(
         action_tokenizer=action_tokenizer,
         split=split,
         val_demos=val_demos,
-        camera=camera,
+        cameras=cameras,
         action_normalizer=action_normalizer,
     )
     pad_id = (

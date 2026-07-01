@@ -26,6 +26,12 @@ from libero.libero.envs import OffScreenRenderEnv
 from libero_dataloader import IMAGE_SIZE, PROMPT_TEMPLATE
 from model import VLAModel
 
+# Model input views, in the SAME order and orientation the dataloader used for
+# training (see libero_dataloader.cameras / WRIST_CAMERAS). Each tuple is
+# (live-env camera name, rotate_180). agentview is rendered upside-down so it is
+# rotated; the wrist camera is already upright.
+EVAL_VIEWS = (("agentview", True), ("robot0_eye_in_hand", False))
+
 
 def load_model(model_path: str, llm_model_name: str, device: torch.device) -> VLAModel:
     print("Loading base model...")
@@ -54,13 +60,17 @@ def load_model(model_path: str, llm_model_name: str, device: torch.device) -> VL
     return model
 
 
-def preprocess_obs(obs_image: np.ndarray, device: torch.device) -> torch.Tensor:
+def preprocess_obs(
+    obs_image: np.ndarray, device: torch.device, rotate: bool = True
+) -> torch.Tensor:
     """(H, W, 3) uint8 → (1, 3, 384, 384) float32 in [0, 1]
 
     The agentview image is rendered upside down; rotate 180 degrees to match the
-    orientation the model was trained on (see libero_dataloader.rotate_180).
+    orientation the model was trained on (see libero_dataloader.rotate_180). The
+    wrist camera is already upright, so callers pass rotate=False for it.
     """
-    obs_image = np.rot90(obs_image, k=2)
+    if rotate:
+        obs_image = np.rot90(obs_image, k=2)
     image = (
         torch.from_numpy(np.ascontiguousarray(obs_image)).permute(2, 0, 1).float()
         / 255.0
@@ -142,7 +152,6 @@ def run_episode(
     init_state: np.ndarray,
     max_steps: int,
     device: torch.device,
-    camera: str,
     instruction: str = "",
     record: bool = False,
     debug_steps: int = 0,
@@ -172,8 +181,16 @@ def run_episode(
     frames: list = []
     success = False
     for step in range(max_steps):
-        raw_image = obs[f"{camera}_image"]
-        image = preprocess_obs(raw_image, device)
+        # Build the multi-view input in the trained order/orientation. Stacking
+        # on dim=1 gives (1, V, 3, 384, 384), which VLAModel.encode_image encodes
+        # per view and concatenates along the token dimension.
+        views = [
+            preprocess_obs(obs[f"{cam}_image"], device, rotate=rot)
+            for cam, rot in EVAL_VIEWS
+        ]
+        image = torch.stack(views, dim=1)
+        # agentview (first view) is used for video/debug overlays.
+        raw_image = obs[f"{EVAL_VIEWS[0][0]}_image"]
 
         with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.float16):
             output_ids = model.generate(
@@ -227,7 +244,6 @@ def evaluate(
     n_episodes: int,
     max_steps: int,
     device: torch.device,
-    camera: str = "agentview",
     save_video_flag: bool = False,
     video_dir: str = "eval_videos",
     video_mode: str = "all",
@@ -271,7 +287,7 @@ def evaluate(
 
         env = OffScreenRenderEnv(
             bddl_file_name=task_bddl_file,
-            camera_names=[camera],
+            camera_names=[cam for cam, _ in EVAL_VIEWS],
             camera_heights=384,
             camera_widths=384,
             use_camera_obs=True,
@@ -302,7 +318,6 @@ def evaluate(
                 init_state,
                 max_steps,
                 device,
-                camera,
                 instruction=task.language,
                 record=record,
                 debug_steps=debug_actions if (task_id == 0 and ep == 0) else 0,
@@ -367,12 +382,6 @@ if __name__ == "__main__":
         default=1000,
         help="Max steps per episode (LIBERO default horizon is 1000)",
     )
-    parser.add_argument(
-        "--camera",
-        type=str,
-        default="agentview",
-        help="Camera name (obs key will be {camera}_image)",
-    )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument(
         "--save_video",
@@ -416,7 +425,6 @@ if __name__ == "__main__":
         n_episodes=args.n_episodes,
         max_steps=args.max_steps,
         device=torch.device(args.device),
-        camera=args.camera,
         save_video_flag=args.save_video,
         video_dir=args.video_dir,
         video_mode=args.video_mode,
