@@ -17,7 +17,8 @@ def download_dataset(dataset_name: str) -> bool:
     cmd = [
         sys.executable,
         "libero/benchmark_scripts/download_libero_datasets.py",
-        "--datasets", dataset_name,
+        "--datasets",
+        dataset_name,
         "--use-huggingface",
     ]
 
@@ -42,9 +43,12 @@ def resize_dataset(dataset_name: str, target_res: int = 256) -> bool:
     cmd = [
         sys.executable,
         "rerender_dataset.py",
-        "--src-dir", str(src_dir),
-        "--dst-dir", str(dst_dir),
-        "--res", str(target_res),
+        "--src-dir",
+        str(src_dir),
+        "--dst-dir",
+        str(dst_dir),
+        "--res",
+        str(target_res),
         "--skip-existing",
     ]
 
@@ -113,11 +117,11 @@ def main():
     print(f"\n✓ Setup complete!")
     print(f"\nTo train with multi-task datasets at {target_res}x{target_res}:")
     print(f"  Update train_libero.py to use:")
-    print(f'    dataset_dir = [')
+    print(f"    dataset_dir = [")
     print(f'      "libero/libero/datasets/libero_spatial_{target_res}",')
     print(f'      "libero/libero/datasets/libero_object_{target_res}",')
     print(f'      "libero/libero/datasets/libero_goal_{target_res}",')
-    print(f'    ]')
+    print(f"    ]")
 
     return 0
 
