@@ -243,9 +243,9 @@ if __name__ == "__main__":
         # dataset_dir="libero/libero/datasets/libero_spatial",
         # Multiple datasets for multi-task learning
         dataset_dir=[
-            "libero/libero/datasets/libero_spatial",
-            "libero/libero/datasets/libero_object",
-            "libero/libero/datasets/libero_goal",
+            "libero/libero/datasets/libero_spatial_256",
+            "libero/libero/datasets/libero_object_256",
+            "libero/libero/datasets/libero_goal_256",
         ],
         llm_model_name="meta-llama/Llama-3.2-3B",
         batch_size=2,
@@ -261,5 +261,5 @@ if __name__ == "__main__":
         lora_alpha=128,
         val_demos=5,
         # Two-view input (OpenVLA-OFT recipe): third-person + wrist camera.
-        cameras=("agentview_rgb", "eye_in_hand_rgb"),
+        cameras=("agentview_rgb",),
     )
