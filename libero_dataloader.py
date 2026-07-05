@@ -47,7 +47,7 @@ class LiberoDataset(Dataset):
 
     def __init__(
         self,
-        dataset_dir: str,
+        dataset_dir: str | list[str],
         tokenizer: PreTrainedTokenizerBase,
         action_tokenizer: ActionTokenizer,
         split: str = "train",
@@ -71,44 +71,63 @@ class LiberoDataset(Dataset):
         # as-is. Rotation is decided per view.
         self.rotate_180 = tuple(cam not in WRIST_CAMERAS for cam in self.cameras)
 
-        # Build flat index: list of (hdf5_path, demo_key, step_idx, instruction)
-        self.samples: list[tuple[str, str, int, str]] = []
+        # Build flat index: list of (hdf5_path, demo_key, step_idx, instruction, task_name)
+        self.samples: list[tuple[str, str, int, str, str]] = []
 
-        hdf5_paths = sorted(glob.glob(os.path.join(dataset_dir, "*.hdf5")))
-        if not hdf5_paths:
-            raise FileNotFoundError(f"No .hdf5 files found in {dataset_dir!r}")
+        # Support both single directory and list of directories
+        if isinstance(dataset_dir, str):
+            dataset_dirs = [dataset_dir]
+        else:
+            dataset_dirs = list(dataset_dir)
 
-        for hdf5_path in hdf5_paths:
-            with h5py.File(hdf5_path, "r") as f:
-                instruction = json.loads(f["data"].attrs["problem_info"])[
-                    "language_instruction"
-                ]
-                all_keys = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[-1]))
+        for dir_path in dataset_dirs:
+            # Extract task name from directory path (e.g., "libero_spatial" from path)
+            task_name = os.path.basename(dir_path.rstrip("/"))
 
-                use_keys = (
-                    all_keys[val_demos:] if split == "train" else all_keys[:val_demos]
-                )
+            hdf5_paths = sorted(glob.glob(os.path.join(dir_path, "*.hdf5")))
+            if not hdf5_paths:
+                print(f"Warning: No .hdf5 files found in {dir_path!r}")
+                continue
 
-                for demo_key in use_keys:
-                    actions = f["data"][demo_key]["actions"][:]  # (T, 7)
-                    n_steps = actions.shape[0]
-                    prev_gripper = None
-                    for step in range(n_steps):
-                        a = actions[step]
-                        # a[:6] = translation (3) + rotation (3), a[6] = gripper
-                        moving = np.linalg.norm(a[:6]) >= NOOP_THRESH
-                        gripper_change = prev_gripper is None or a[6] != prev_gripper
-                        prev_gripper = a[6]
-                        # Drop "no-op" steps: no motion AND no gripper state change.
-                        if not moving and not gripper_change:
-                            continue
-                        self.samples.append((hdf5_path, demo_key, step, instruction))
+            for hdf5_path in hdf5_paths:
+                with h5py.File(hdf5_path, "r") as f:
+                    instruction = json.loads(f["data"].attrs["problem_info"])[
+                        "language_instruction"
+                    ]
+                    all_keys = sorted(
+                        f["data"].keys(), key=lambda k: int(k.split("_")[-1])
+                    )
+
+                    use_keys = (
+                        all_keys[val_demos:]
+                        if split == "train"
+                        else all_keys[:val_demos]
+                    )
+
+                    for demo_key in use_keys:
+                        actions = f["data"][demo_key]["actions"][:]  # (T, 7)
+                        n_steps = actions.shape[0]
+                        prev_gripper = None
+                        for step in range(n_steps):
+                            a = actions[step]
+                            # a[:6] = translation (3) + rotation (3), a[6] = gripper
+                            moving = np.linalg.norm(a[:6]) >= NOOP_THRESH
+                            gripper_change = (
+                                prev_gripper is None or a[6] != prev_gripper
+                            )
+                            prev_gripper = a[6]
+                            # Drop "no-op" steps: no motion AND no gripper state change.
+                            if not moving and not gripper_change:
+                                continue
+                            self.samples.append(
+                                (hdf5_path, demo_key, step, instruction, task_name)
+                            )
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, idx: int) -> dict:
-        hdf5_path, demo_key, step, instruction = self.samples[idx]
+        hdf5_path, demo_key, step, instruction, task_name = self.samples[idx]
 
         # Open per call — safe for DataLoader multiprocessing (h5py handles
         # are not picklable, so we cannot hold one open across worker forks).
@@ -164,6 +183,7 @@ class LiberoDataset(Dataset):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
+            "task_name": task_name,
         }
 
 
@@ -172,6 +192,8 @@ def _collate_fn(batch: list[dict], pad_token_id: int) -> dict:
     max_len = max(b["input_ids"].shape[0] for b in batch)
 
     input_ids_list, masks_list, labels_list = [], [], []
+    task_names = [b["task_name"] for b in batch]
+
     for b in batch:
         pad_len = max_len - b["input_ids"].shape[0]
         input_ids_list.append(F.pad(b["input_ids"], (0, pad_len), value=pad_token_id))
@@ -183,6 +205,7 @@ def _collate_fn(batch: list[dict], pad_token_id: int) -> dict:
         "input_ids": torch.stack(input_ids_list),
         "attention_mask": torch.stack(masks_list),
         "labels": torch.stack(labels_list),
+        "task_names": task_names,
     }
 
 

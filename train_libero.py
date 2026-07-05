@@ -11,7 +11,7 @@ from action_normalizer import compute_action_stats
 from action_tokenizer import ActionTokenizer
 from libero_dataloader import get_libero_dataloader
 from model import VLAModel
-from train import evaluate
+from train import evaluate as evaluate_base
 
 
 def set_seed(seed: int) -> None:
@@ -22,8 +22,47 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
+@torch.no_grad()
+def evaluate(model, val_loader, device):
+    """Evaluate with task-level loss reporting."""
+    model.eval()
+    total_loss = 0
+    task_losses = {}
+    task_counts = {}
+
+    for batch_data in val_loader:
+        images = batch_data["image"].to(device)
+        input_ids = batch_data["input_ids"].to(device)
+        attention_mask = batch_data["attention_mask"].to(device)
+        labels = batch_data["labels"].to(device)
+        task_names = batch_data["task_names"]
+
+        with torch.amp.autocast("cuda", dtype=torch.float16):
+            outputs = model(images, input_ids, attention_mask, labels)
+            loss = outputs.loss
+
+        if loss is not None:
+            total_loss += loss.item()
+            # Accumulate per-task losses
+            for task_name in task_names:
+                if task_name not in task_losses:
+                    task_losses[task_name] = 0
+                    task_counts[task_name] = 0
+                task_losses[task_name] += loss.item()
+                task_counts[task_name] += 1
+
+    model.train()
+
+    # Normalize task losses
+    for task_name in task_losses:
+        task_losses[task_name] /= task_counts[task_name]
+
+    avg_loss = total_loss / sum(task_counts.values()) if task_counts else float("inf")
+    return avg_loss, task_losses
+
+
 def train(
-    dataset_dir: str,
+    dataset_dir: str | list[str],
     llm_model_name: str,
     batch_size: int,
     num_epochs: int,
@@ -163,8 +202,10 @@ def train(
                 i + 1
             ) % gradient_accumulation_steps == 0:
                 torch.cuda.empty_cache()
-                val_loss = evaluate(model, val_loader, device)
+                val_loss, task_losses = evaluate(model, val_loader, device)
                 print(f"\nStep {i + 1} | Val Loss: {val_loss:.4f}")
+                for task_name, loss in task_losses.items():
+                    print(f"  {task_name}: {loss:.4f}")
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -198,8 +239,14 @@ def train(
 
 if __name__ == "__main__":
     train(
+        # Single dataset
         # dataset_dir="libero/libero/datasets/libero_spatial",
-        dataset_dir="libero/libero/datasets/libero_spatial_384",
+        # Multiple datasets for multi-task learning
+        dataset_dir=[
+            "libero/libero/datasets/libero_spatial",
+            "libero/libero/datasets/libero_object",
+            "libero/libero/datasets/libero_goal",
+        ],
         llm_model_name="meta-llama/Llama-3.2-3B",
         batch_size=2,
         num_epochs=5,
@@ -208,7 +255,7 @@ if __name__ == "__main__":
         eval_interval=1000,
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        save_model_path="checkpoints/libero_spatial",
+        save_model_path="checkpoints/libero_multitask",
         gradient_accumulation_steps=2,
         lora_r=32,
         lora_alpha=128,

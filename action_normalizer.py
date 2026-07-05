@@ -73,7 +73,7 @@ class ActionNormalizer:
 
 
 def compute_action_stats(
-    dataset_dir: str,
+    dataset_dir: str | list[str],
     split: str = "train",
     val_demos: int = 5,
     noop_thresh: float = 1e-4,
@@ -82,29 +82,40 @@ def compute_action_stats(
     """Compute q01/q99 over the (no-op filtered) split, matching the dataloader.
 
     The gripper dimension is excluded from normalization (mask=False).
+    Supports single directory or list of directories.
     """
-    hdf5_paths = sorted(glob.glob(os.path.join(dataset_dir, "*.hdf5")))
-    if not hdf5_paths:
-        raise FileNotFoundError(f"No .hdf5 files found in {dataset_dir!r}")
+    if isinstance(dataset_dir, str):
+        dataset_dirs = [dataset_dir]
+    else:
+        dataset_dirs = list(dataset_dir)
 
     collected = []
-    for hdf5_path in hdf5_paths:
-        with h5py.File(hdf5_path, "r") as f:
-            all_keys = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[-1]))
-            use_keys = (
-                all_keys[val_demos:] if split == "train" else all_keys[:val_demos]
-            )
-            for demo_key in use_keys:
-                actions = f["data"][demo_key]["actions"][:]  # (T, 7)
-                prev_gripper = None
-                for step in range(actions.shape[0]):
-                    a = actions[step]
-                    moving = np.linalg.norm(a[:6]) >= noop_thresh
-                    gripper_change = prev_gripper is None or a[6] != prev_gripper
-                    prev_gripper = a[6]
-                    if not moving and not gripper_change:
-                        continue
-                    collected.append(a)
+    for dir_path in dataset_dirs:
+        hdf5_paths = sorted(glob.glob(os.path.join(dir_path, "*.hdf5")))
+        if not hdf5_paths:
+            print(f"Warning: No .hdf5 files found in {dir_path!r}")
+            continue
+
+        for hdf5_path in hdf5_paths:
+            with h5py.File(hdf5_path, "r") as f:
+                all_keys = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[-1]))
+                use_keys = (
+                    all_keys[val_demos:] if split == "train" else all_keys[:val_demos]
+                )
+                for demo_key in use_keys:
+                    actions = f["data"][demo_key]["actions"][:]  # (T, 7)
+                    prev_gripper = None
+                    for step in range(actions.shape[0]):
+                        a = actions[step]
+                        moving = np.linalg.norm(a[:6]) >= noop_thresh
+                        gripper_change = prev_gripper is None or a[6] != prev_gripper
+                        prev_gripper = a[6]
+                        if not moving and not gripper_change:
+                            continue
+                        collected.append(a)
+
+    if not collected:
+        raise FileNotFoundError(f"No actions collected from {dataset_dirs}")
 
     acts = np.asarray(collected, dtype=np.float64)  # (N, action_dim)
     q01 = np.percentile(acts, 1, axis=0)
