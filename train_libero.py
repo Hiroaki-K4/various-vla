@@ -57,7 +57,9 @@ def evaluate(model, val_loader, device):
                         task_losses[task_name] = 0
                         task_counts[task_name] = 0
                     # Distribute batch loss proportionally
-                    task_losses[task_name] += batch_loss * (task_count_in_batch / len(task_names))
+                    task_losses[task_name] += batch_loss * (
+                        task_count_in_batch / len(task_names)
+                    )
                     task_counts[task_name] += task_count_in_batch
 
     model.train()
@@ -157,6 +159,7 @@ def train(
         val_demos=val_demos,
         cameras=cameras,
         action_normalizer=action_normalizer,
+        val_step_ratio=0.2,
     )
 
     print(

@@ -54,15 +54,21 @@ class LiberoDataset(Dataset):
         val_demos: int = 5,
         cameras: tuple[str, ...] = ("agentview_rgb",),
         action_normalizer: ActionNormalizer | None = None,
+        val_step_ratio: float = 1.0,
     ):
         assert split in (
             "train",
             "val",
         ), f"split must be 'train' or 'val', got {split!r}"
         assert len(cameras) >= 1, "at least one camera is required"
+        assert (
+            0 < val_step_ratio <= 1.0
+        ), f"val_step_ratio must be in (0, 1], got {val_step_ratio}"
         self.tokenizer = tokenizer
         self.action_tokenizer = action_tokenizer
         self.action_normalizer = action_normalizer
+        self.split = split
+        self.val_step_ratio = val_step_ratio
         # One or more camera views (e.g. third-person + wrist). Each view is
         # encoded independently and its patch tokens are concatenated downstream.
         self.cameras = tuple(cameras)
@@ -108,6 +114,7 @@ class LiberoDataset(Dataset):
                         actions = f["data"][demo_key]["actions"][:]  # (T, 7)
                         n_steps = actions.shape[0]
                         prev_gripper = None
+                        valid_steps = []
                         for step in range(n_steps):
                             a = actions[step]
                             # a[:6] = translation (3) + rotation (3), a[6] = gripper
@@ -119,6 +126,23 @@ class LiberoDataset(Dataset):
                             # Drop "no-op" steps: no motion AND no gripper state change.
                             if not moving and not gripper_change:
                                 continue
+                            valid_steps.append(step)
+
+                        # For val split, optionally subsample steps
+                        if split == "val" and self.val_step_ratio < 1.0:
+                            np.random.seed(
+                                hash(demo_key) % (2**31)
+                            )  # Deterministic sampling
+                            n_samples = max(
+                                1, int(len(valid_steps) * self.val_step_ratio)
+                            )
+                            valid_steps = list(
+                                np.random.choice(
+                                    valid_steps, size=n_samples, replace=False
+                                )
+                            )
+
+                        for step in valid_steps:
                             self.samples.append(
                                 (hdf5_path, demo_key, step, instruction, task_name)
                             )
@@ -220,12 +244,14 @@ def get_libero_dataloader(
     cameras: tuple[str, ...] = ("agentview_rgb",),
     action_normalizer: ActionNormalizer | None = None,
     seed: int | None = None,
+    val_step_ratio: float = 1.0,
 ) -> DataLoader:
     """
     Args:
         dataset_dir: path to a libero task-suite directory, e.g.
                      "libero/libero/datasets/libero_spatial"
         val_demos:   first N demos per HDF5 file reserved for validation.
+        val_step_ratio: for val split, ratio of steps to sample (0 < ratio <= 1.0).
         seed:        if set, makes shuffling and worker RNG reproducible.
     """
     dataset = LiberoDataset(
@@ -236,6 +262,7 @@ def get_libero_dataloader(
         val_demos=val_demos,
         cameras=cameras,
         action_normalizer=action_normalizer,
+        val_step_ratio=val_step_ratio,
     )
     pad_id = (
         tokenizer.pad_token_id
