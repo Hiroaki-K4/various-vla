@@ -24,7 +24,7 @@ def set_seed(seed: int) -> None:
 
 @torch.no_grad()
 def evaluate(model, val_loader, device):
-    """Evaluate with task-level loss reporting."""
+    """Evaluate with task-level loss reporting (per-sample computation)."""
     model.eval()
     total_loss = 0
     task_losses = {}
@@ -42,25 +42,21 @@ def evaluate(model, val_loader, device):
         with torch.amp.autocast("cuda", dtype=torch.float16):
             outputs = model(images, input_ids, attention_mask, labels)
             loss = outputs.loss
+            per_sample_loss = outputs.per_sample_loss
 
         if loss is not None:
             batch_loss = loss.item()
             total_loss += batch_loss
 
-            # Accumulate per-task losses
-            # For each unique task in this batch, distribute the loss proportionally
-            if isinstance(task_names, (list, tuple)):
-                task_set = set(task_names)
-                for task_name in task_set:
-                    task_count_in_batch = sum(1 for tn in task_names if tn == task_name)
+            # Accumulate per-task losses using per-sample losses
+            if isinstance(task_names, (list, tuple)) and per_sample_loss is not None:
+                per_sample_loss_cpu = per_sample_loss.detach().cpu()
+                for idx, task_name in enumerate(task_names):
                     if task_name not in task_losses:
                         task_losses[task_name] = 0
                         task_counts[task_name] = 0
-                    # Distribute batch loss proportionally
-                    task_losses[task_name] += batch_loss * (
-                        task_count_in_batch / len(task_names)
-                    )
-                    task_counts[task_name] += task_count_in_batch
+                    task_losses[task_name] += per_sample_loss_cpu[idx].item()
+                    task_counts[task_name] += 1
 
     model.train()
 

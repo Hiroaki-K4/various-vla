@@ -172,6 +172,8 @@ class VLAModel(nn.Module):
         input_ids: (B, T)
         attention_mask: (B, T)
         labels: (B, T)
+
+        Returns: model outputs with per-sample loss for multi-task learning.
         """
 
         input_embeds, full_mask, N = self._build_inputs(
@@ -186,12 +188,42 @@ class VLAModel(nn.Module):
         else:
             full_labels = None
 
-        # Pass inputs to LLM
+        # Pass inputs to LLM without loss computation
         outputs = self.llm(
             inputs_embeds=input_embeds,
             attention_mask=full_mask,
-            labels=full_labels,
+            labels=None,  # Compute loss manually for per-sample tracking
         )
+
+        # Compute per-sample loss for multi-task learning
+        if labels is not None:
+            logits = outputs.logits  # (B, N+T, vocab_size)
+            vocab_size = logits.shape[-1]
+
+            # Reshape for loss computation: (B*(N+T), vocab_size)
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = full_labels[..., 1:].contiguous()
+
+            shift_logits = shift_logits.view(-1, vocab_size)
+            shift_labels = shift_labels.view(-1)
+
+            # Compute per-token loss
+            token_loss = F.cross_entropy(shift_logits, shift_labels, reduction="none")
+
+            # Reshape back to (B, T) and mask out vision tokens (label == -100)
+            token_loss = token_loss.view(B, -1)
+            loss_mask = (full_labels[..., 1:] != -100).float()
+
+            # Per-sample loss (average over valid tokens)
+            per_sample_loss = (token_loss * loss_mask).sum(dim=1) / (
+                loss_mask.sum(dim=1) + 1e-8
+            )
+            batch_loss = per_sample_loss.mean()
+
+            # Attach per-sample loss to outputs for evaluate() to use
+            outputs.loss = batch_loss
+            outputs.per_sample_loss = per_sample_loss
+
         return outputs
 
     def generate(self, images, input_ids, attention_mask, max_new_tokens=7):
