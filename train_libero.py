@@ -29,8 +29,10 @@ def evaluate(model, val_loader, device):
     total_loss = 0
     task_losses = {}
     task_counts = {}
+    batch_count = 0
 
     for batch_data in val_loader:
+        batch_count += 1
         images = batch_data["image"].to(device)
         input_ids = batch_data["input_ids"].to(device)
         attention_mask = batch_data["attention_mask"].to(device)
@@ -42,22 +44,31 @@ def evaluate(model, val_loader, device):
             loss = outputs.loss
 
         if loss is not None:
-            total_loss += loss.item()
+            batch_loss = loss.item()
+            total_loss += batch_loss
+
             # Accumulate per-task losses
-            for task_name in task_names:
-                if task_name not in task_losses:
-                    task_losses[task_name] = 0
-                    task_counts[task_name] = 0
-                task_losses[task_name] += loss.item()
-                task_counts[task_name] += 1
+            # For each unique task in this batch, distribute the loss proportionally
+            if isinstance(task_names, (list, tuple)):
+                task_set = set(task_names)
+                for task_name in task_set:
+                    task_count_in_batch = sum(1 for tn in task_names if tn == task_name)
+                    if task_name not in task_losses:
+                        task_losses[task_name] = 0
+                        task_counts[task_name] = 0
+                    # Distribute batch loss proportionally
+                    task_losses[task_name] += batch_loss * (task_count_in_batch / len(task_names))
+                    task_counts[task_name] += task_count_in_batch
 
     model.train()
 
-    # Normalize task losses
+    # Normalize task losses by count
     for task_name in task_losses:
-        task_losses[task_name] /= task_counts[task_name]
+        if task_counts[task_name] > 0:
+            task_losses[task_name] /= task_counts[task_name]
 
-    avg_loss = total_loss / sum(task_counts.values()) if task_counts else float("inf")
+    avg_loss = total_loss / batch_count if batch_count > 0 else float("inf")
+
     return avg_loss, task_losses
 
 
@@ -239,9 +250,7 @@ def train(
 
 if __name__ == "__main__":
     train(
-        # Single dataset
-        # dataset_dir="libero/libero/datasets/libero_spatial",
-        # Multiple datasets for multi-task learning
+        # Multi-task learning: spatial + object + goal (256x256 resolution)
         dataset_dir=[
             "libero/libero/datasets/libero_spatial_256",
             "libero/libero/datasets/libero_object_256",
@@ -255,7 +264,7 @@ if __name__ == "__main__":
         eval_interval=1000,
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        save_model_path="checkpoints/libero_multitask",
+        save_model_path="checkpoints/libero_multitask_256",
         gradient_accumulation_steps=2,
         lora_r=32,
         lora_alpha=128,
