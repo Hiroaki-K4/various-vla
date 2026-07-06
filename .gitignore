@@ -4,9 +4,12 @@ best_vla_model/
 *.mp4
 *.png
 *.pt
-.pth
+*.pth
 eval_videos/
 *.json
 *.db
 dataset_videos/
 scratch_*/
+eval_videos*/
+checkpoints*/
+*.jpg

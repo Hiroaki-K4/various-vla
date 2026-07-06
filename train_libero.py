@@ -259,7 +259,7 @@ if __name__ == "__main__":
         batch_size=2,
         num_epochs=5,
         lr_rate=1e-5,
-        patience=3,
+        patience=5,
         eval_interval=1000,
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
