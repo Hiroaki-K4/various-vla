@@ -137,7 +137,6 @@ class VLAModel(nn.Module):
         dino_feats = self.dino.get_intermediate_layers(
             dino_input,
             n=[len(self.dino.blocks) - 2],
-            return_class_token=False,
         )[
             0
         ]  # (B, 729, 1024)
@@ -149,7 +148,6 @@ class VLAModel(nn.Module):
         siglip_feats = self.siglip.get_intermediate_layers(
             siglip_input,
             n=[len(self.siglip.blocks) - 2],
-            return_class_token=False,
         )[
             0
         ]  # (B, 729, 1152)

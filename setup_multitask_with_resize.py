@@ -3,6 +3,7 @@
 Download LIBERO datasets (object, goal) and convert to 256 resolution.
 spatial is assumed to already exist.
 """
+
 import subprocess
 import sys
 from pathlib import Path

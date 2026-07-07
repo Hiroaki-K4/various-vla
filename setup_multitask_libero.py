@@ -3,6 +3,7 @@
 Download LIBERO object and goal datasets.
 spatial is assumed to already exist.
 """
+
 import subprocess
 import sys
 from pathlib import Path
