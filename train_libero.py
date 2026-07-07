@@ -252,8 +252,8 @@ if __name__ == "__main__":
         # Multi-task learning: spatial + object + goal (256x256 resolution)
         dataset_dir=[
             "libero/libero/datasets/libero_spatial_256",
-            "libero/libero/datasets/libero_object_256",
-            "libero/libero/datasets/libero_goal_256",
+            # "libero/libero/datasets/libero_object_256",
+            # "libero/libero/datasets/libero_goal_256",
         ],
         llm_model_name="meta-llama/Llama-3.2-3B",
         batch_size=2,
@@ -263,7 +263,7 @@ if __name__ == "__main__":
         eval_interval=1000,
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        save_model_path="checkpoints/libero_multitask_256",
+        save_model_path="checkpoints/libero_spatial_256_3layers",
         gradient_accumulation_steps=2,
         lora_r=32,
         lora_alpha=128,

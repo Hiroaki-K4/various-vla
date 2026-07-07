@@ -42,8 +42,13 @@ class VLAModel(nn.Module):
         llm_dim = self.llm.config.hidden_size  # 2048
 
         # Projection layers (fp32 master weights)
+        initial_projection_dim = 4 * vision_dim
         self.projector = nn.Sequential(
-            nn.Linear(vision_dim, llm_dim), nn.GELU(), nn.Linear(llm_dim, llm_dim)
+            nn.Linear(vision_dim, initial_projection_dim),
+            nn.GELU(),
+            nn.Linear(initial_projection_dim, llm_dim),
+            nn.GELU(),
+            nn.Linear(llm_dim, llm_dim),
         ).to(device=device)
 
         # Per-encoder image normalization stats. DINOv2 was pretrained with
@@ -128,12 +133,26 @@ class VLAModel(nn.Module):
         )
         dino_input = (dino_input - self._dino_mean) / self._dino_std
         dino_out = self.dino.forward_features(dino_input)
-        dino_feats = dino_out["x_norm_patchtokens"]  # (B, 729, 1024)
+        # dino_feats = dino_out["x_norm_patchtokens"]  # (B, 729, 1024)
+        dino_feats = self.dino.get_intermediate_layers(
+            dino_input,
+            n=[len(self.dino.blocks) - 2],
+            return_class_token=False,
+        )[
+            0
+        ]  # (B, 729, 1024)
 
         # SigLIP runs natively at 384 (floor(384/14)=27 patches per side) and
         # was pretrained with mean=std=0.5 normalization.
         siglip_input = (images - self._siglip_mean) / self._siglip_std
-        siglip_feats = self.siglip.forward_features(siglip_input)  # (B, 729, 1152)
+        # siglip_feats = self.siglip.forward_features(siglip_input)  # (B, 729, 1152)
+        siglip_feats = self.siglip.get_intermediate_layers(
+            siglip_input,
+            n=[len(self.siglip.blocks) - 2],
+            return_class_token=False,
+        )[
+            0
+        ]  # (B, 729, 1152)
 
         vision_feats = torch.cat([dino_feats, siglip_feats], dim=-1)  # (B, 729, 2176)
         return vision_feats
