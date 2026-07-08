@@ -152,19 +152,16 @@ class LiberoDataset(Dataset):
         # Define augmentation
         self.image_aug = image_aug and (split == "train")
         if self.image_aug:
-            self.aug_transform = T.Compose([
-                T.RandomResizedCrop(
-                    size=IMAGE_SIZE,
-                    scale=(0.9, 0.9),
-                    ratio=(1.0, 1.0)
-                ),
-                T.ColorJitter(
-                    brightness=0.2,
-                    contrast=0.2,
-                    saturation=0.2,
-                    hue=0.05
-                ),
-            ])
+            self.aug_transform = T.Compose(
+                [
+                    T.RandomResizedCrop(
+                        size=IMAGE_SIZE, scale=(0.9, 0.9), ratio=(1.0, 1.0)
+                    ),
+                    T.ColorJitter(
+                        brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05
+                    ),
+                ]
+            )
         else:
             self.aug_transform = None
 
