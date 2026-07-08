@@ -263,7 +263,7 @@ if __name__ == "__main__":
         eval_interval=1000,
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        save_model_path="checkpoints/libero_spatial_256_3layers",
+        save_model_path="checkpoints/libero_spatial",
         gradient_accumulation_steps=2,
         lora_r=32,
         lora_alpha=128,

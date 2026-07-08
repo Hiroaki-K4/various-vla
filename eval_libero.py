@@ -30,7 +30,8 @@ from model import VLAModel
 # training (see libero_dataloader.cameras / WRIST_CAMERAS). Each tuple is
 # (live-env camera name, rotate_180). agentview is rendered upside-down so it is
 # rotated; the wrist camera is already upright.
-EVAL_VIEWS = (("agentview", True), ("robot0_eye_in_hand", False))
+# EVAL_VIEWS = (("agentview", True), ("robot0_eye_in_hand", False))
+EVAL_VIEWS = (("agentview", True),)
 
 
 def load_model(model_path: str, llm_model_name: str, device: torch.device) -> VLAModel:
@@ -288,8 +289,10 @@ def evaluate(
         env = OffScreenRenderEnv(
             bddl_file_name=task_bddl_file,
             camera_names=[cam for cam, _ in EVAL_VIEWS],
-            camera_heights=384,
-            camera_widths=384,
+            # camera_heights=384,
+            # camera_widths=384,
+            camera_heights=256,
+            camera_widths=256,
             use_camera_obs=True,
             ignore_done=True,
         )
