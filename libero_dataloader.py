@@ -8,6 +8,7 @@ import h5py
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms as T
 from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizerBase
 
@@ -55,6 +56,7 @@ class LiberoDataset(Dataset):
         cameras: tuple[str, ...] = ("agentview_rgb",),
         action_normalizer: ActionNormalizer | None = None,
         val_step_ratio: float = 1.0,
+        image_aug: bool = False,
     ):
         assert split in (
             "train",
@@ -147,6 +149,25 @@ class LiberoDataset(Dataset):
                                 (hdf5_path, demo_key, step, instruction, task_name)
                             )
 
+        # Define augmentation
+        self.image_aug = image_aug and (split == "train")
+        if self.image_aug:
+            self.aug_transform = T.Compose([
+                T.RandomResizedCrop(
+                    size=IMAGE_SIZE,
+                    scale=(0.9, 0.9),
+                    ratio=(1.0, 1.0)
+                ),
+                T.ColorJitter(
+                    brightness=0.2,
+                    contrast=0.2,
+                    saturation=0.2,
+                    hue=0.05
+                ),
+            ])
+        else:
+            self.aug_transform = None
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -158,7 +179,8 @@ class LiberoDataset(Dataset):
         view_imgs = []
         with h5py.File(hdf5_path, "r") as f:
             obs = f["data"][demo_key]["obs"]
-            for cam, rotate in zip(self.cameras, self.rotate_180):
+            seed = random.randint(0, 2**31 - 1) if self.image_aug else None
+            for i, (cam, rotate) in enumerate(zip(self.cameras, self.rotate_180)):
                 image_np = obs[cam][step]  # (H, W, 3) uint8
                 if rotate:
                     image_np = np.rot90(image_np, k=2)  # flip upside down
@@ -175,6 +197,12 @@ class LiberoDataset(Dataset):
                     mode="bilinear",
                     align_corners=False,
                 ).squeeze(0)
+
+                if self.aug_transform is not None:
+                    torch.manual_seed(seed + i)
+                    np.random.seed(seed + i)
+                    img = self.aug_transform(img)
+
                 view_imgs.append(img)
             action_np = f["data"][demo_key]["actions"][step].astype(np.float32)  # (7,)
 
@@ -245,6 +273,7 @@ def get_libero_dataloader(
     action_normalizer: ActionNormalizer | None = None,
     seed: int | None = None,
     val_step_ratio: float = 1.0,
+    image_aug: bool = True,
 ) -> DataLoader:
     """
     Args:
@@ -263,6 +292,7 @@ def get_libero_dataloader(
         cameras=cameras,
         action_normalizer=action_normalizer,
         val_step_ratio=val_step_ratio,
+        image_aug=image_aug,
     )
     pad_id = (
         tokenizer.pad_token_id

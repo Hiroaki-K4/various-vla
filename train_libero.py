@@ -89,6 +89,7 @@ def train(
     cameras: tuple[str, ...] = ("agentview_rgb",),
     warmup_ratio: float = 0.05,
     seed: int = 42,
+    image_aug: bool = True,
 ):
     set_seed(seed)
     print(f"Random seed set to {seed}")
@@ -144,6 +145,7 @@ def train(
         cameras=cameras,
         action_normalizer=action_normalizer,
         seed=seed,
+        image_aug=image_aug,
     )
     val_loader = get_libero_dataloader(
         dataset_dir=dataset_dir,
@@ -156,6 +158,7 @@ def train(
         cameras=cameras,
         action_normalizer=action_normalizer,
         val_step_ratio=0.2,
+        image_aug=False,
     )
 
     print(
@@ -270,4 +273,5 @@ if __name__ == "__main__":
         val_demos=5,
         # Two-view input (OpenVLA-OFT recipe): third-person + wrist camera.
         cameras=("agentview_rgb",),
+        image_aug=True,
     )
