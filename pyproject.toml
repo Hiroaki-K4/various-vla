@@ -33,6 +33,7 @@ dependencies = [
     # Plamo dependencies
     "causal-conv1d==1.4.0",
     "mamba-ssm==2.0.3",
+    "triton>=2.0.0,<2.1.0",
 ]
 
 [tool.uv]
