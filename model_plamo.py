@@ -14,6 +14,12 @@ class PlamoVLAModel(nn.Module):
     - LLM predicts action tokens directly as part of the sequence
     - No separate action head needed - LLM vocabulary includes action tokens
     - Post-training: action tokens are converted back to continuous values via ActionTokenizer
+
+    Key architecture details:
+    - text_config.hidden_size: 2048
+    - vision_config.image_feature_size: 1152
+    - image_proj: Already integrated MLPImageProjector (1152 -> 2048)
+    - vision_model: SiglipVisionTransformer (384x384 input)
     """
 
     def __init__(
@@ -34,7 +40,7 @@ class PlamoVLAModel(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(
             plamo_model_name,
             low_cpu_mem_usage=True,
-            torch_dtype=torch.float32,
+            dtype=torch.float32,
             trust_remote_code=True,
         ).to(device)
 
@@ -74,35 +80,36 @@ class PlamoVLAModel(nn.Module):
         """
 
         # Process images with Plamo's processor
-        # Note: Plamo expects images in its native format
+        # Note: processor expects images as a list, not tensor
+        batch_size = images.shape[0]
+        images_list = [images[i] for i in range(batch_size)]
+
         processed = self.processor(
-            images=images,
+            images=images_list,
+            text=None,
             return_tensors="pt",
         )
 
-        # Get image features from Plamo
-        image_features = processed.get("image_features")
-        if image_features is None:
-            # Fallback: run through Plamo's vision encoder
-            # This depends on Plamo's internal structure
-            with torch.no_grad():
-                image_embeds = self.model.vision_model(images)
+        # Plamo's forward pass directly handles vision + text combination
+        # Get pixel values from processor
+        pixel_values = processed.get("pixel_values")
+        if pixel_values is not None:
+            pixel_values = pixel_values.to(self.device)
+
+            # Forward through model with both vision and text
+            outputs = self.model(
+                pixel_values=pixel_values,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=None,  # Compute loss manually
+            )
         else:
-            image_embeds = image_features.to(self.device)
-
-        # Get text embeddings
-        text_embeds = self.model.get_input_embeddings()(input_ids)
-
-        # Combine image and text embeddings
-        # For Plamo, we need to follow its expected input format
-        combined_embeds = self._combine_modalities(image_embeds, text_embeds)
-
-        # Forward through language model
-        outputs = self.model(
-            inputs_embeds=combined_embeds,
-            attention_mask=attention_mask,
-            labels=None,  # Compute loss manually
-        )
+            # Fallback if processor doesn't return pixel_values
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=None,
+            )
 
         # Compute per-sample loss for multi-task learning
         if labels is not None:
@@ -120,11 +127,10 @@ class PlamoVLAModel(nn.Module):
             token_loss = F.cross_entropy(shift_logits, shift_labels, reduction="none")
 
             # Reshape back to (B, T)
-            B = images.shape[0]
-            token_loss = token_loss.view(B, -1)
+            token_loss = token_loss.view(batch_size, -1)
 
-            # Create loss mask (valid tokens only)
-            loss_mask = (shift_labels.view(B, -1) != -100).float()
+            # Create loss mask (valid tokens only, -100 means ignore)
+            loss_mask = (shift_labels.view(batch_size, -1) != -100).float()
 
             # Per-sample loss
             per_sample_loss = (token_loss * loss_mask).sum(dim=1) / (
@@ -136,24 +142,6 @@ class PlamoVLAModel(nn.Module):
             outputs.per_sample_loss = per_sample_loss
 
         return outputs
-
-    def _combine_modalities(self, image_embeds, text_embeds):
-        """
-        Combine image and text embeddings.
-        The exact method depends on Plamo's architecture.
-        """
-        # Simple concatenation (may need adjustment based on Plamo's design)
-        if image_embeds.dim() == 2:
-            # image_embeds: (B, vision_dim)
-            image_embeds = image_embeds.unsqueeze(1)  # (B, 1, vision_dim)
-
-        # Project image embeddings to text embedding dimension if needed
-        if image_embeds.shape[-1] != text_embeds.shape[-1]:
-            # Would need a projection layer here
-            pass
-
-        combined = torch.cat([image_embeds, text_embeds], dim=1)
-        return combined
 
     def generate(
         self,
@@ -176,36 +164,41 @@ class PlamoVLAModel(nn.Module):
         """
 
         # Process images
+        batch_size = images.shape[0]
+        images_list = [images[i] for i in range(batch_size)]
+
         processed = self.processor(
-            images=images,
+            images=images_list,
+            text=None,
             return_tensors="pt",
         )
 
-        image_embeds = processed.get("image_features")
-        if image_embeds is None:
-            with torch.no_grad():
-                image_embeds = self.model.vision_model(images)
+        pixel_values = processed.get("pixel_values")
+        if pixel_values is not None:
+            pixel_values = pixel_values.to(self.device)
+
+            # Generate
+            eos_token_id = self.model.config.eos_token_id
+            if isinstance(eos_token_id, (list, tuple)):
+                eos_token_id = eos_token_id[0]
+
+            output_ids = self.model.generate(
+                pixel_values=pixel_values,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=self.model.config.pad_token_id,
+                eos_token_id=eos_token_id,
+            )
         else:
-            image_embeds = image_embeds.to(self.device)
-
-        # Get text embeddings
-        text_embeds = self.model.get_input_embeddings()(input_ids)
-
-        # Combine
-        combined_embeds = self._combine_modalities(image_embeds, text_embeds)
-
-        # Generate
-        eos_token_id = self.model.config.eos_token_id
-        if isinstance(eos_token_id, (list, tuple)):
-            eos_token_id = eos_token_id[0]
-
-        output_ids = self.model.generate(
-            inputs_embeds=combined_embeds,
-            attention_mask=attention_mask,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            pad_token_id=eos_token_id,
-        )
+            # Fallback
+            output_ids = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+            )
 
         return output_ids
 
