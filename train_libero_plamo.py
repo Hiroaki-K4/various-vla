@@ -1,16 +1,119 @@
 import os
 import random
+from functools import partial
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
+from PIL import Image
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
 
 from action_normalizer import compute_action_stats
 from action_tokenizer import ActionTokenizer
-from libero_dataloader import get_libero_dataloader
+from libero_dataloader import LiberoDataset, get_libero_dataloader
 from model_plamo import PlamoVLAModel
+
+
+def _tensor_to_pil(image_tensor):
+    """Convert (3, H, W) float32 [0,1] tensor to PIL Image"""
+    from PIL import Image
+
+    image_np = (image_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+    return Image.fromarray(image_np)
+
+
+def _pad_1d_tensors(sequences, pad_value: int):
+    """Pad 1D tensors to same length for batching."""
+    max_len = max(seq.numel() for seq in sequences)
+    output = torch.full(
+        (len(sequences), max_len),
+        fill_value=pad_value,
+        dtype=sequences[0].dtype,
+    )
+    for i, seq in enumerate(sequences):
+        output[i, : seq.numel()] = seq
+    return output
+
+
+def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
+    """
+    Collate function for Plamo VLA training.
+
+    Processor is applied to images + text to get proper input_ids with image_token inserted.
+    Labels are reconstructed based on processor output to align with modified input_ids.
+    """
+    images_list = []
+    text_list = []
+    action_token_ids_list = []
+    task_names = []
+
+    for sample in batch:
+        images_list.append(sample["image"])  # (V, 3, H, W)
+
+        # Text is prompt + action tokens (already in token form)
+        input_ids = sample["input_ids"]
+        labels = sample["labels"]
+
+        # Decode input_ids to get text
+        text = tokenizer.decode(input_ids, skip_special_tokens=False)
+        text_list.append(text)
+        action_token_ids_list.append(labels)
+        task_names.append(sample["task_name"])
+
+    # Stack images
+    batch_images = torch.stack(
+        [img[:, 0] if img.dim() == 4 else img for img in images_list]
+    )  # (B, 3, H, W)
+
+    # Convert to PIL for processor
+    pil_images = [_tensor_to_pil(batch_images[i]) for i in range(batch_images.shape[0])]
+
+    # Process with Plamo processor
+    processed = processor(
+        text=text_list,
+        images=pil_images,
+        padding=True,
+        return_tensors="pt",
+    )
+
+    # Get prompt length before action tokens (from original input_ids)
+    # After processor, input_ids has: [image_tokens] + [prompt] + [action_tokens]
+    # We need to mask prompt but not image_tokens, and keep action tokens
+
+    # Create labels: only supervise action tokens
+    batch_size = processed["input_ids"].shape[0]
+    seq_len = processed["input_ids"].shape[1]
+
+    labels_batch = torch.full(
+        (batch_size, seq_len), fill_value=ignore_index, dtype=torch.long
+    )
+
+    # Use actual action_token_ids collected from dataloader
+    # Each sample has action_token_ids which we collected earlier
+    for b in range(batch_size):
+        action_tokens = action_token_ids_list[b]
+        action_dim = action_tokens.numel()
+
+        # Find actual sequence length from attention_mask (last 1 position)
+        attention_mask = processed["attention_mask"][b]
+        last_real_pos = attention_mask.sum().item()
+        end = int(last_real_pos)
+        start = end - action_dim
+
+        # Supervise action tokens at their actual position
+        if start >= 0:
+            labels_batch[b, start:end] = action_tokens
+
+    return {
+        "image": batch_images,
+        "input_ids": processed["input_ids"],
+        "attention_mask": processed["attention_mask"],
+        "pixel_values": processed["pixel_values"],
+        "labels": labels_batch,
+        "task_names": task_names,
+    }
 
 
 def set_seed(seed: int) -> None:
@@ -32,29 +135,47 @@ def evaluate(model, val_loader, device):
 
     for batch_data in val_loader:
         batch_count += 1
-        images = batch_data["image"].to(device)
         input_ids = batch_data["input_ids"].to(device)
         attention_mask = batch_data["attention_mask"].to(device)
+        pixel_values = batch_data["pixel_values"].to(device)
         labels = batch_data["labels"].to(device)
         task_names = batch_data["task_names"]
 
         with torch.amp.autocast("cuda", dtype=torch.float16):
-            outputs = model(images, input_ids, attention_mask, labels)
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                pixel_values=pixel_values,
+                labels=labels,
+            )
             loss = outputs.loss
-            per_sample_loss = outputs.per_sample_loss
 
         if loss is not None:
             batch_loss = loss.item()
             total_loss += batch_loss
 
-            # Accumulate per-task losses using per-sample losses
-            if isinstance(task_names, (list, tuple)) and per_sample_loss is not None:
-                per_sample_loss_cpu = per_sample_loss.detach().cpu()
+            # Compute per-sample loss for accurate task-level metrics
+            if isinstance(task_names, (list, tuple)) and hasattr(outputs, "logits"):
+                logits = outputs.logits
+                per_sample_loss_list = []
+                for b in range(logits.shape[0]):
+                    # Causal LM: shift logits and labels (predict next token)
+                    sample_logits = logits[b, :-1].unsqueeze(0)  # (1, T-1, vocab_size)
+                    sample_labels = labels[b, 1:].unsqueeze(0)  # (1, T-1)
+                    sample_loss = F.cross_entropy(
+                        sample_logits.view(-1, sample_logits.shape[-1]),
+                        sample_labels.view(-1),
+                        reduction="mean",
+                        ignore_index=-100,
+                    )
+                    per_sample_loss_list.append(sample_loss.item())
+
+                # Accumulate per-task losses using per-sample losses
                 for idx, task_name in enumerate(task_names):
                     if task_name not in task_losses:
                         task_losses[task_name] = 0
                         task_counts[task_name] = 0
-                    task_losses[task_name] += per_sample_loss_cpu[idx].item()
+                    task_losses[task_name] += per_sample_loss_list[idx]
                     task_counts[task_name] += 1
 
     model.train()
@@ -140,33 +261,55 @@ def train(
         action_normalizer.save(stats_path)
         print(f"Saved action stats to {stats_path}")
 
-    # Create data loaders
-    train_loader = get_libero_dataloader(
+    # Create data loaders with Plamo-specific collate function
+    from torch.utils.data import DataLoader
+
+    from libero_dataloader import LiberoDataset
+
+    train_dataset = LiberoDataset(
         dataset_dir=dataset_dir,
         tokenizer=tokenizer,
         action_tokenizer=action_tokenizer,
-        batch_size=batch_size,
         split="train",
-        num_workers=num_workers,
         val_demos=val_demos,
         cameras=cameras,
         action_normalizer=action_normalizer,
-        seed=seed,
         image_aug=image_aug,
     )
 
-    val_loader = get_libero_dataloader(
+    val_dataset = LiberoDataset(
         dataset_dir=dataset_dir,
         tokenizer=tokenizer,
         action_tokenizer=action_tokenizer,
-        batch_size=batch_size,
         split="val",
-        num_workers=num_workers,
         val_demos=val_demos,
         cameras=cameras,
         action_normalizer=action_normalizer,
         val_step_ratio=0.2,
         image_aug=False,
+    )
+
+    # Use Plamo-specific collate function
+    collate_fn = partial(
+        _collate_fn_plamo, processor=model.processor, tokenizer=tokenizer
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True,
     )
 
     print(
@@ -198,13 +341,18 @@ def train(
     for epoch in range(num_epochs):
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
         for i, batch in enumerate(pbar):
-            images = batch["image"].to(device)
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
+            pixel_values = batch["pixel_values"].to(device)
             labels = batch["labels"].to(device)
 
             with torch.amp.autocast("cuda", dtype=torch.float16):
-                outputs = model(images, input_ids, attention_mask, labels)
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    pixel_values=pixel_values,
+                    labels=labels,
+                )
                 loss = outputs.loss / gradient_accumulation_steps
 
             if loss is None or torch.isnan(loss) or torch.isinf(loss):

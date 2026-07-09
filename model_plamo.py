@@ -1,33 +1,19 @@
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from PIL import Image
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-
-
-def _tensor_to_pil(image_tensor):
-    """Convert (3, H, W) float32 [0,1] tensor to PIL Image"""
-    image_np = (image_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
-    return Image.fromarray(image_np)
+from transformers import AutoModelForCausalLM, AutoProcessor
 
 
 class PlamoVLAModel(nn.Module):
     """
-    VLA model based on Plamo-2.1-2B-VL vision-language model.
-    Plamo already provides integrated vision and language components.
+    VLA model based on Plamo-2.1-2B-VL.
 
-    Action prediction approach:
-    - Uses tokenized actions: continuous values are discretized into tokens
-    - LLM predicts action tokens directly as part of the sequence
-    - No separate action head needed - LLM vocabulary includes action tokens
-    - Post-training: action tokens are converted back to continuous values via ActionTokenizer
+    Uses processor to handle image + text → input_ids + pixel_values conversion.
+    Processor automatically inserts image_token_id into input_ids.
 
-    Key architecture details:
-    - text_config.hidden_size: 2048
-    - vision_config.image_feature_size: 1152
-    - image_proj: Already integrated MLPImageProjector (1152 -> 2048)
-    - vision_model: SiglipVisionTransformer (384x384 input)
+    Action prediction:
+    - Prompt + action tokens are fed to processor
+    - Processor handles image_token_id insertion
+    - Model predicts next tokens (including action tokens)
     """
 
     def __init__(
@@ -48,7 +34,7 @@ class PlamoVLAModel(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(
             plamo_model_name,
             low_cpu_mem_usage=True,
-            dtype=torch.float32,
+            torch_dtype=torch.float32,
             trust_remote_code=True,
         ).to(device)
 
@@ -69,163 +55,72 @@ class PlamoVLAModel(nn.Module):
 
     def forward(
         self,
-        images: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        pixel_values: torch.Tensor,
         labels: torch.Tensor = None,
     ):
         """
         Forward pass for training.
 
         Args:
-            images: (B, 3, H, W) or (B, V, 3, H, W) - Raw RGB images in [0, 1]
-                    V is number of camera views (e.g., multi-view input)
-            input_ids: (B, T) - Tokenized text input
-            attention_mask: (B, T) - Attention mask for text
-            labels: (B, T) - Target token IDs for action prediction
+            input_ids: (B, T) - Processed by collate_fn (with image_token inserted)
+            attention_mask: (B, T) - From processor
+            pixel_values: (total_tiles, C, H, W) - From processor (not batched)
+            labels: (B, T) - Target tokens for loss (use -100 to ignore)
 
         Returns:
-            outputs with loss and per-sample loss for multi-task learning
+            Model outputs (includes loss when labels provided)
         """
 
-        # Handle multi-view format: (B, V, 3, H, W) → (B, 3, H, W)
-        # For now, use only first view (V=1 is default)
-        if images.dim() == 5:
-            images = images[:, 0]  # Take first view only
-
-        batch_size = images.shape[0]
-
-        # Process images with Plamo's processor
-        # Note: processor expects PIL Images (not tensors) and a single text string
-        pil_images = [_tensor_to_pil(images[i]) for i in range(batch_size)]
-
-        processed = self.processor(
-            images=pil_images,
-            text="",  # Empty text (image-only input)
-            return_tensors="pt",
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            labels=labels,
         )
-
-        # Plamo's forward pass directly handles vision + text combination
-        # Get pixel values from processor
-        pixel_values = processed.get("pixel_values")
-        if pixel_values is not None:
-            pixel_values = pixel_values.to(self.device)
-
-            # Forward through model with both vision and text
-            # outputs = self.model(
-            #     pixel_values=pixel_values,
-            #     input_ids=input_ids,
-            #     attention_mask=attention_mask,
-            #     labels=None,  # Compute loss manually
-            # )
-            outputs = self.model(
-                **processed,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=None,
-            )
-        else:
-            # Fallback if processor doesn't return pixel_values
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=None,
-            )
-
-        # Compute per-sample loss for multi-task learning
-        if labels is not None:
-            logits = outputs.logits  # (B, seq_len, vocab_size)
-            vocab_size = logits.shape[-1]
-
-            # Shift for causal language modeling
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-
-            shift_logits = shift_logits.view(-1, vocab_size)
-            shift_labels = shift_labels.view(-1)
-
-            # Compute per-token loss
-            token_loss = F.cross_entropy(shift_logits, shift_labels, reduction="none")
-
-            # Reshape back to (B, T)
-            token_loss = token_loss.view(batch_size, -1)
-
-            # Create loss mask (valid tokens only, -100 means ignore)
-            loss_mask = (shift_labels.view(batch_size, -1) != -100).float()
-
-            # Per-sample loss
-            per_sample_loss = (token_loss * loss_mask).sum(dim=1) / (
-                loss_mask.sum(dim=1) + 1e-8
-            )
-            batch_loss = per_sample_loss.mean()
-
-            outputs.loss = batch_loss
-            outputs.per_sample_loss = per_sample_loss
 
         return outputs
 
     def generate(
         self,
-        images: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        pixel_values: torch.Tensor,
         max_new_tokens: int = 7,
     ):
         """
-        Generate action tokens given image and text input.
+        Generate action tokens.
 
         Args:
-            images: (B, 3, H, W) or (B, V, 3, H, W)
-            input_ids: (B, T)
-            attention_mask: (B, T)
+            input_ids: (B, T) - Processed by collate_fn (with image_token inserted)
+            attention_mask: (B, T) - From processor
+            pixel_values: (total_tiles, C, H, W) - From processor
             max_new_tokens: Number of tokens to generate
 
         Returns:
-            Generated token IDs (B, max_new_tokens)
+            Generated token IDs only (B, max_new_tokens) - excludes input_ids
         """
 
-        # Handle multi-view format: (B, V, 3, H, W) → (B, 3, H, W)
-        # For now, use only first view (V=1 is default)
-        if images.dim() == 5:
-            images = images[:, 0]  # Take first view only
+        eos_token_id = self.model.config.eos_token_id
+        if isinstance(eos_token_id, (list, tuple)):
+            eos_token_id = eos_token_id[0]
 
-        batch_size = images.shape[0]
+        input_len = input_ids.shape[1]
 
-        # Process images - convert tensor to PIL Image
-        pil_images = [_tensor_to_pil(images[i]) for i in range(batch_size)]
-
-        processed = self.processor(
-            images=pil_images,
-            text="",  # Empty text (image-only input)
-            return_tensors="pt",
+        output_ids = self.model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            pixel_values=pixel_values,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            eos_token_id=eos_token_id,
         )
 
-        pixel_values = processed.get("pixel_values")
-        if pixel_values is not None:
-            pixel_values = pixel_values.to(self.device)
-
-            # Generate
-            eos_token_id = self.model.config.eos_token_id
-            if isinstance(eos_token_id, (list, tuple)):
-                eos_token_id = eos_token_id[0]
-
-            output_ids = self.model.generate(
-                pixel_values=pixel_values,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                pad_token_id=self.model.config.pad_token_id,
-                eos_token_id=eos_token_id,
-            )
-        else:
-            # Fallback
-            output_ids = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-            )
+        # Ensure we return only new tokens (not prompt)
+        # Some models return [input_ids, new_tokens], others return [new_tokens]
+        if output_ids.shape[1] > input_len:
+            output_ids = output_ids[:, input_len:]
 
         return output_ids
 
@@ -238,16 +133,24 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = PlamoVLAModel(device=device)
 
-    images = torch.randn(2, 3, 384, 384).to(device)
-    input_ids = torch.randint(0, 1000, (2, 10)).to(device)
-    attention_mask = torch.ones(2, 10, dtype=torch.long).to(device)
-    labels = torch.randint(0, 1000, (2, 10)).to(device)
+    # Test with proper input from processor
+    input_ids = torch.randint(0, 1000, (2, 100)).to(device)
+    attention_mask = torch.ones(2, 100, dtype=torch.long).to(device)
+    pixel_values = torch.randn(200, 3, 384, 384).to(device)  # (total_tiles, C, H, W)
+    labels = torch.randint(0, 1000, (2, 100)).to(device)
 
-    # Training
-    out = model(images, input_ids, attention_mask, labels=labels)
+    # Forward
+    out = model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        pixel_values=pixel_values,
+        labels=labels,
+    )
     print("loss:", out.loss)
     print("logits:", out.logits.shape)
 
-    # Inference
-    generated = model.generate(images, input_ids, attention_mask)
+    # Generate
+    generated = model.generate(
+        input_ids=input_ids, attention_mask=attention_mask, pixel_values=pixel_values
+    )
     print("generated:", generated.shape)
