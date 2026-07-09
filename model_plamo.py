@@ -1,7 +1,15 @@
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from PIL import Image
 from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+
+
+def _tensor_to_pil(image_tensor):
+    """Convert (3, H, W) float32 [0,1] tensor to PIL Image"""
+    image_np = (image_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+    return Image.fromarray(image_np)
 
 
 class PlamoVLAModel(nn.Module):
@@ -88,12 +96,12 @@ class PlamoVLAModel(nn.Module):
         batch_size = images.shape[0]
 
         # Process images with Plamo's processor
-        # Note: processor expects images and text as lists
-        images_list = [images[i] for i in range(batch_size)]
+        # Note: processor expects PIL Images (not tensors) and text as lists
+        pil_images = [_tensor_to_pil(images[i]) for i in range(batch_size)]
         text_list = [""] * batch_size  # Empty text (image-only input)
 
         processed = self.processor(
-            images=images_list,
+            images=pil_images,
             text=text_list,
             return_tensors="pt",
         )
@@ -178,12 +186,12 @@ class PlamoVLAModel(nn.Module):
 
         batch_size = images.shape[0]
 
-        # Process images
-        images_list = [images[i] for i in range(batch_size)]
+        # Process images - convert tensor to PIL Image
+        pil_images = [_tensor_to_pil(images[i]) for i in range(batch_size)]
         text_list = [""] * batch_size  # Empty text (image-only input)
 
         processed = self.processor(
-            images=images_list,
+            images=pil_images,
             text=text_list,
             return_tensors="pt",
         )

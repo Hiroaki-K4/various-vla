@@ -3,8 +3,16 @@ Script to inspect the internal structure and API of Plamo-2.1-2B-VL.
 Run this before implementation to understand Plamo's exact API.
 """
 
+import numpy as np
 import torch
+from PIL import Image
 from transformers import AutoModelForCausalLM, AutoProcessor
+
+
+def tensor_to_pil(image_tensor):
+    """Convert (3, H, W) float32 [0,1] tensor to PIL Image"""
+    image_np = (image_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+    return Image.fromarray(image_np)
 
 
 def inspect_plamo():
@@ -107,10 +115,11 @@ def inspect_plamo():
 
         if processor is not None:
             print("  Processing images with processor...")
-            # Plamo processor expects both images and text (can be empty strings)
-            images_list = [dummy_images[i] for i in range(dummy_images.shape[0])]
-            text_list = [""] * len(images_list)  # Dummy text
-            processed = processor(images=images_list, text=text_list, return_tensors="pt")
+            # Plamo processor expects PIL Images, not tensors
+            # Convert (B, 3, H, W) float32 [0,1] tensor to PIL Images
+            pil_images = [tensor_to_pil(dummy_images[i]) for i in range(dummy_images.shape[0])]
+            text_list = [""] * len(pil_images)  # Dummy text
+            processed = processor(images=pil_images, text=text_list, return_tensors="pt")
             print(f"  ✓ Processor output keys: {list(processed.keys())}")
             for key, val in processed.items():
                 if isinstance(val, torch.Tensor):
