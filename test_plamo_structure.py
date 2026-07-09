@@ -107,9 +107,10 @@ def inspect_plamo():
 
         if processor is not None:
             print("  Processing images with processor...")
-            # Plamo processor expects images as a list, not tensor
+            # Plamo processor expects both images and text (can be empty strings)
             images_list = [dummy_images[i] for i in range(dummy_images.shape[0])]
-            processed = processor(images=images_list, return_tensors="pt")
+            text_list = [""] * len(images_list)  # Dummy text
+            processed = processor(images=images_list, text=text_list, return_tensors="pt")
             print(f"  ✓ Processor output keys: {list(processed.keys())}")
             for key, val in processed.items():
                 if isinstance(val, torch.Tensor):

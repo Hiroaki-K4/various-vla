@@ -88,12 +88,13 @@ class PlamoVLAModel(nn.Module):
         batch_size = images.shape[0]
 
         # Process images with Plamo's processor
-        # Note: processor expects images as a list, not tensor
+        # Note: processor expects images and text as lists
         images_list = [images[i] for i in range(batch_size)]
+        text_list = [""] * batch_size  # Empty text (image-only input)
 
         processed = self.processor(
             images=images_list,
-            text=None,
+            text=text_list,
             return_tensors="pt",
         )
 
@@ -179,10 +180,11 @@ class PlamoVLAModel(nn.Module):
 
         # Process images
         images_list = [images[i] for i in range(batch_size)]
+        text_list = [""] * batch_size  # Empty text (image-only input)
 
         processed = self.processor(
             images=images_list,
-            text=None,
+            text=text_list,
             return_tensors="pt",
         )
 
