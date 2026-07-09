@@ -96,13 +96,12 @@ class PlamoVLAModel(nn.Module):
         batch_size = images.shape[0]
 
         # Process images with Plamo's processor
-        # Note: processor expects PIL Images (not tensors) and text as lists
+        # Note: processor expects PIL Images (not tensors) and a single text string
         pil_images = [_tensor_to_pil(images[i]) for i in range(batch_size)]
-        text_list = [""] * batch_size  # Empty text (image-only input)
 
         processed = self.processor(
             images=pil_images,
-            text=text_list,
+            text="",  # Empty text (image-only input)
             return_tensors="pt",
         )
 
@@ -188,11 +187,10 @@ class PlamoVLAModel(nn.Module):
 
         # Process images - convert tensor to PIL Image
         pil_images = [_tensor_to_pil(images[i]) for i in range(batch_size)]
-        text_list = [""] * batch_size  # Empty text (image-only input)
 
         processed = self.processor(
             images=pil_images,
-            text=text_list,
+            text="",  # Empty text (image-only input)
             return_tensors="pt",
         )
 
