@@ -30,6 +30,9 @@ dependencies = [
     "einops",
     "easydict",
     "libero",
+    # Plamo dependencies
+    "causal-conv1d==1.6.0",
+    "mamba-ssm==2.3.0",
 ]
 
 [tool.uv]
