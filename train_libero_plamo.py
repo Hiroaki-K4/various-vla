@@ -403,7 +403,7 @@ def train(
 if __name__ == "__main__":
     train(
         dataset_dir=[
-            "libero/libero/datasets/libero_spatial_256",
+            "../../various-vla/libero/libero/datasets/libero_spatial_256",
         ],
         plamo_model_name="pfnet/plamo-2.1-2b-vl",
         batch_size=2,
@@ -413,7 +413,7 @@ if __name__ == "__main__":
         eval_interval=1000,
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        save_model_path="checkpoints/libero_plamo",
+        save_model_path="checkpoints/libero_plamo_vl_2b",
         gradient_accumulation_steps=2,
         lora_r=32,
         lora_alpha=128,
