@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "libero"))
+
 import argparse
 import os
 import sys
@@ -30,13 +33,27 @@ EVAL_VIEWS = (("agentview", True),)
 
 
 def load_model(model_path: str, device: torch.device) -> PlamoVLAModel:
-    """Load Plamo-VL model with LoRA adapter."""
+    """Load Plamo-VL model with LoRA adapter or PyTorch checkpoint."""
     print("Loading Plamo-2.1-2B-VL base model...")
     model = PlamoVLAModel(device=device)
 
     if os.path.exists(model_path):
-        print(f"Loading LoRA adapter from {model_path}...")
-        model.model = PeftModel.from_pretrained(model.model, model_path)
+        # Check if it's a LoRA adapter directory
+        adapter_config_path = os.path.join(model_path, "adapter_config.json")
+        if os.path.exists(adapter_config_path):
+            print(f"Loading LoRA adapter from {model_path}...")
+            model.model = PeftModel.from_pretrained(model.model, model_path)
+        else:
+            # Try loading as a PyTorch checkpoint
+            model_pth_path = os.path.join(model_path, "model.pth")
+            if os.path.exists(model_pth_path):
+                print(f"Loading PyTorch checkpoint from {model_pth_path}...")
+                state_dict = torch.load(model_pth_path, map_location=device)
+                model.model.load_state_dict(state_dict)
+            elif os.path.isfile(model_path) and model_path.endswith(".pth"):
+                print(f"Loading PyTorch checkpoint from {model_path}...")
+                state_dict = torch.load(model_path, map_location=device)
+                model.model.load_state_dict(state_dict)
 
     model.eval()
     return model
@@ -318,7 +335,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model-path",
         type=str,
-        default="checkpoints/libero_plamo_vl_2b",
+        default="checkpoints_plamo_vl_2b/libero_plamo",
         help="Path to model checkpoint",
     )
     parser.add_argument(
@@ -328,10 +345,10 @@ if __name__ == "__main__":
         help="Task suite name (libero_spatial, libero_object, libero_goal)",
     )
     parser.add_argument(
-        "--n-episodes", type=int, default=5, help="Episodes per task"
+        "--n-episodes", type=int, default=10, help="Episodes per task"
     )
     parser.add_argument(
-        "--max-steps", type=int, default=80, help="Max steps per episode"
+        "--max-steps", type=int, default=1000, help="Max steps per episode"
     )
     parser.add_argument(
         "--save-video", action="store_true", help="Save episode videos"
@@ -345,7 +362,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--video-mode",
         type=str,
-        default="fail",
+        default="all",
         choices=["first", "fail", "all"],
         help="Which videos to save",
     )
@@ -362,7 +379,10 @@ if __name__ == "__main__":
         help="Debug every N steps",
     )
     parser.add_argument(
-        "--center-crop", action="store_true", help="Apply center crop to images"
+        "--no_center_crop",
+        action="store_false",
+        dest="center_crop",
+        help="Disable center crop at 90% scale (default is enabled)",
     )
     args = parser.parse_args()
 
