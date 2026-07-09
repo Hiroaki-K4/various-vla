@@ -112,11 +112,17 @@ class PlamoVLAModel(nn.Module):
             pixel_values = pixel_values.to(self.device)
 
             # Forward through model with both vision and text
+            # outputs = self.model(
+            #     pixel_values=pixel_values,
+            #     input_ids=input_ids,
+            #     attention_mask=attention_mask,
+            #     labels=None,  # Compute loss manually
+            # )
             outputs = self.model(
-                pixel_values=pixel_values,
+                **processed,
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                labels=None,  # Compute loss manually
+                labels=None,
             )
         else:
             # Fallback if processor doesn't return pixel_values
