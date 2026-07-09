@@ -67,16 +67,40 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
         [img[0] if img.dim() == 4 else img for img in images_list]
     )  # (B, 3, H, W)
 
-    # Convert to PIL for processor
-    pil_images = [_tensor_to_pil(batch_images[i]) for i in range(batch_images.shape[0])]
+    # Process each sample individually with Plamo processor (expects single text + image)
+    batch_processed = []
+    for i in range(len(batch)):
+        pil_image = _tensor_to_pil(batch_images[i])
+        text = text_list[i]
+        processed_sample = processor(
+            text=text,
+            images=pil_image,
+            return_tensors="pt",
+        )
+        batch_processed.append(processed_sample)
 
-    # Process with Plamo processor
-    processed = processor(
-        text=text_list,
-        images=pil_images,
-        padding=True,
-        return_tensors="pt",
-    )
+    # Pad input_ids to same length across batch
+    input_ids_list = [p["input_ids"].squeeze(0) for p in batch_processed]
+    attention_mask_list = [p["attention_mask"].squeeze(0) for p in batch_processed]
+
+    # Pad input_ids and attention_mask to max length
+    max_seq_len = max(ids.shape[0] for ids in input_ids_list)
+    input_ids_padded = torch.full((len(batch), max_seq_len), processor.tokenizer.pad_token_id, dtype=torch.long)
+    attention_mask_padded = torch.zeros((len(batch), max_seq_len), dtype=torch.long)
+
+    for i, (ids, mask) in enumerate(zip(input_ids_list, attention_mask_list)):
+        input_ids_padded[i, :ids.shape[0]] = ids
+        attention_mask_padded[i, :mask.shape[0]] = mask
+
+    # Collect pixel_values (concatenated across batch)
+    pixel_values_list = [p["pixel_values"] for p in batch_processed]
+    pixel_values = torch.cat(pixel_values_list, dim=0)
+
+    processed = {
+        "input_ids": input_ids_padded,
+        "attention_mask": attention_mask_padded,
+        "pixel_values": pixel_values,
+    }
 
     # Get prompt length before action tokens (from original input_ids)
     # After processor, input_ids has: [image_tokens] + [prompt] + [action_tokens]
