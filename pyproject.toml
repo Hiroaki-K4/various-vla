@@ -30,6 +30,8 @@ dependencies = [
     "einops",
     "easydict",
     "libero",
+    "mamba-ssm>=0.1.0",
+    "causal-conv1d>=1.0.0",
 ]
 
 [tool.uv]
