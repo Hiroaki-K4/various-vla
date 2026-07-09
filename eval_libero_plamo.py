@@ -168,6 +168,12 @@ def run_episode(
         attention_mask = processor_output["attention_mask"].to(device)
         pixel_values = processor_output["pixel_values"].to(device)
 
+        if step == 0:
+            print(f"[Debug] processor output shapes:")
+            print(f"  input_ids: {input_ids.shape}")
+            print(f"  attention_mask: {attention_mask.shape}")
+            print(f"  pixel_values: {pixel_values.shape}")
+
         with torch.no_grad():
             output_ids = model.generate(
                 input_ids, attention_mask, pixel_values, max_new_tokens=7
