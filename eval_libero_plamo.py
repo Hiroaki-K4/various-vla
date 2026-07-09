@@ -161,7 +161,7 @@ def run_episode(
         # Use Plamo processor for consistent image processing
         processor_output = model.processor(
             text=prompt,
-            images=[processed_image],
+            images=processed_image,
             return_tensors="pt"
         )
         input_ids = processor_output["input_ids"].to(device)
