@@ -22,7 +22,6 @@ dependencies = [
     "mamba-ssm==2.3.0",
     "causal-conv1d==1.6.0",
     "numba==0.64.0",
-    "numpy==1.26.4",
     "ninja>=1.13.0",
     "packaging>=26.2",
     "setuptools>=82.0.1",
