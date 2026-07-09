@@ -264,8 +264,9 @@ def train(
 
     # Note: Plamo's structure may differ - adjust target_modules if needed
     model.model = get_peft_model(model.model, lora_config)
-    model.model.enable_input_require_grads()
-    model.model.gradient_checkpointing_enable()
+    model.model.gradient_checkpointing_enable(
+        gradient_checkpointing_kwargs={"use_reentrant": False}
+    )
     model.model.config.use_cache = False
 
     # Get tokenizer (use Plamo's built-in tokenizer)
