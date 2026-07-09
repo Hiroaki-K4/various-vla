@@ -49,11 +49,11 @@ def load_model(model_path: str, device: torch.device) -> PlamoVLAModel:
             if os.path.exists(model_pth_path):
                 print(f"Loading PyTorch checkpoint from {model_pth_path}...")
                 state_dict = torch.load(model_pth_path, map_location=device)
-                model.model.load_state_dict(state_dict)
+                model.model.load_state_dict(state_dict, strict=False)
             elif os.path.isfile(model_path) and model_path.endswith(".pth"):
                 print(f"Loading PyTorch checkpoint from {model_path}...")
                 state_dict = torch.load(model_path, map_location=device)
-                model.model.load_state_dict(state_dict)
+                model.model.load_state_dict(state_dict, strict=False)
 
     model.eval()
     return model
