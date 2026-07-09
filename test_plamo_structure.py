@@ -39,8 +39,37 @@ def inspect_plamo():
     # Model structure
     print("\n[2] Model Structure:")
     print(f"  Model type: {type(model)}")
-    print(f"  Hidden size: {model.config.hidden_size}")
-    print(f"  Vocab size: {model.config.vocab_size}")
+
+    # Try to get hidden size from various possible attributes
+    hidden_size = None
+    for attr in ["hidden_size", "d_model", "dim", "hidden_dim"]:
+        if hasattr(model.config, attr):
+            hidden_size = getattr(model.config, attr)
+            print(f"  Hidden size ({attr}): {hidden_size}")
+            break
+    if hidden_size is None:
+        print(f"  Hidden size: Not found in standard attributes")
+
+    # Try to get vocab size
+    vocab_size = None
+    for attr in ["vocab_size", "vocab_size"]:
+        if hasattr(model.config, attr):
+            vocab_size = getattr(model.config, attr)
+            print(f"  Vocab size: {vocab_size}")
+            break
+    if vocab_size is None:
+        print(f"  Vocab size: Not found in standard attributes")
+
+    # Print all config attributes for inspection
+    print("\n  Available config attributes:")
+    for attr in dir(model.config):
+        if not attr.startswith("_"):
+            try:
+                val = getattr(model.config, attr)
+                if not callable(val):
+                    print(f"    - {attr}: {val}")
+            except:
+                pass
 
     # Main modules
     print("\n[3] Main Model Modules:")
