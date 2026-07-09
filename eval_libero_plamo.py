@@ -179,6 +179,12 @@ def run_episode(
         raw_image = obs[f"{EVAL_VIEWS[0][0]}_image"]
 
         with torch.no_grad():
+            # Debug: Check input shapes
+            if step == 0:
+                print(f"[Debug] input_ids shape: {input_ids.shape}")
+                print(f"[Debug] attention_mask shape: {attention_mask.shape}")
+                print(f"[Debug] image shape: {image.shape}, using image[:, 0] shape: {image[:, 0].shape}")
+
             output_ids = model.generate(
                 input_ids, attention_mask, image[:, 0], max_new_tokens=7
             )
