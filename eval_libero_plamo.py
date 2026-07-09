@@ -10,7 +10,6 @@ import cv2
 import imageio
 import numpy as np
 import torch
-import torch.nn.functional as F
 from peft import PeftModel
 from transformers import AutoTokenizer
 
@@ -26,7 +25,7 @@ from action_normalizer import ActionNormalizer
 from action_tokenizer import ActionTokenizer
 from libero.libero import benchmark, get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
-from libero_dataloader import IMAGE_SIZE, PROMPT_TEMPLATE
+from libero_dataloader import PROMPT_TEMPLATE
 from model_plamo import PlamoVLAModel
 
 EVAL_VIEWS = (("agentview", True),)
@@ -59,30 +58,6 @@ def load_model(model_path: str, device: torch.device) -> PlamoVLAModel:
     return model
 
 
-def preprocess_obs(
-    obs_image: np.ndarray,
-    device: torch.device,
-    rotate: bool = True,
-    center_crop: bool = True,
-) -> torch.Tensor:
-    """(H, W, 3) uint8 → (1, 3, 384, 384) float32 in [0, 1]"""
-    if rotate:
-        obs_image = np.rot90(obs_image, k=2)
-
-    if center_crop:
-        h, w = obs_image.shape[:2]
-        crop_h, crop_w = int(h * 0.9), int(w * 0.9)
-        start_h, start_w = (h - crop_h) // 2, (w - crop_w) // 2
-        obs_image = obs_image[start_h : start_h + crop_h, start_w : start_w + crop_w]
-
-    image = (
-        torch.from_numpy(np.ascontiguousarray(obs_image)).permute(2, 0, 1).float()
-        / 255.0
-    )
-    image = F.interpolate(
-        image.unsqueeze(0), size=IMAGE_SIZE, mode="bilinear", align_corners=False
-    )
-    return image.to(device)
 
 
 def annotate_frame(
@@ -169,19 +144,20 @@ def run_episode(
     for step in range(max_steps):
         raw_image = obs[f"{EVAL_VIEWS[0][0]}_image"]
 
-        # Rotate and center crop if needed
+        # Rotate image 180 degrees to match training convention
+        processed_image = np.rot90(raw_image, k=2)
+
+        # Center crop if needed
         if center_crop:
-            h, w = raw_image.shape[:2]
+            h, w = processed_image.shape[:2]
             crop_h, crop_w = int(h * 0.9), int(w * 0.9)
             start_h, start_w = (h - crop_h) // 2, (w - crop_w) // 2
-            processed_image = raw_image[start_h : start_h + crop_h, start_w : start_w + crop_w]
-        else:
-            processed_image = raw_image
+            processed_image = processed_image[start_h : start_h + crop_h, start_w : start_w + crop_w]
 
         # Use Plamo processor for consistent image processing
         processor_output = model.processor(
             text=prompt,
-            images=processed_image,
+            images=[processed_image],
             return_tensors="pt"
         )
         input_ids = processor_output["input_ids"].to(device)
