@@ -107,7 +107,9 @@ def inspect_plamo():
 
         if processor is not None:
             print("  Processing images with processor...")
-            processed = processor(images=dummy_images, return_tensors="pt")
+            # Plamo processor expects images as a list, not tensor
+            images_list = [dummy_images[i] for i in range(dummy_images.shape[0])]
+            processed = processor(images=images_list, return_tensors="pt")
             print(f"  ✓ Processor output keys: {list(processed.keys())}")
             for key, val in processed.items():
                 if isinstance(val, torch.Tensor):
@@ -116,12 +118,24 @@ def inspect_plamo():
         # Model inference
         print("  Running model inference...")
         with torch.no_grad():
-            if processor is not None:
-                outputs = model(**processed)
+            if processor is not None and "processed" in locals():
+                try:
+                    outputs = model(**processed)
+                except Exception as e:
+                    print(f"    Error with processed output: {e}")
+                    outputs = None
             else:
                 # Fallback: raw input_ids if processor not available
                 dummy_input_ids = torch.randint(0, 1000, (1, 10))
-                outputs = model(input_ids=dummy_input_ids)
+                try:
+                    outputs = model(input_ids=dummy_input_ids)
+                except Exception as e:
+                    print(f"    Error with input_ids: {e}")
+                    outputs = None
+
+        if outputs is None:
+            print("  ✗ Model inference failed")
+            return
 
         print(f"  ✓ Model output keys: {list(outputs.__dict__.keys())}")
         if hasattr(outputs, "logits"):

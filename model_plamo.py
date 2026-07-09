@@ -70,7 +70,8 @@ class PlamoVLAModel(nn.Module):
         Forward pass for training.
 
         Args:
-            images: (B, 3, H, W) - Raw RGB images in [0, 1]
+            images: (B, 3, H, W) or (B, V, 3, H, W) - Raw RGB images in [0, 1]
+                    V is number of camera views (e.g., multi-view input)
             input_ids: (B, T) - Tokenized text input
             attention_mask: (B, T) - Attention mask for text
             labels: (B, T) - Target token IDs for action prediction
@@ -79,9 +80,15 @@ class PlamoVLAModel(nn.Module):
             outputs with loss and per-sample loss for multi-task learning
         """
 
+        # Handle multi-view format: (B, V, 3, H, W) → (B, 3, H, W)
+        # For now, use only first view (V=1 is default)
+        if images.dim() == 5:
+            images = images[:, 0]  # Take first view only
+
+        batch_size = images.shape[0]
+
         # Process images with Plamo's processor
         # Note: processor expects images as a list, not tensor
-        batch_size = images.shape[0]
         images_list = [images[i] for i in range(batch_size)]
 
         processed = self.processor(
@@ -154,7 +161,7 @@ class PlamoVLAModel(nn.Module):
         Generate action tokens given image and text input.
 
         Args:
-            images: (B, 3, H, W)
+            images: (B, 3, H, W) or (B, V, 3, H, W)
             input_ids: (B, T)
             attention_mask: (B, T)
             max_new_tokens: Number of tokens to generate
@@ -163,8 +170,14 @@ class PlamoVLAModel(nn.Module):
             Generated token IDs (B, max_new_tokens)
         """
 
-        # Process images
+        # Handle multi-view format: (B, V, 3, H, W) → (B, 3, H, W)
+        # For now, use only first view (V=1 is default)
+        if images.dim() == 5:
+            images = images[:, 0]  # Take first view only
+
         batch_size = images.shape[0]
+
+        # Process images
         images_list = [images[i] for i in range(batch_size)]
 
         processed = self.processor(
