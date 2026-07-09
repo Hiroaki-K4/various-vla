@@ -62,7 +62,10 @@ def load_model(model_path: str, llm_model_name: str, device: torch.device) -> VL
 
 
 def preprocess_obs(
-    obs_image: np.ndarray, device: torch.device, rotate: bool = True
+    obs_image: np.ndarray,
+    device: torch.device,
+    rotate: bool = True,
+    center_crop: bool = True,
 ) -> torch.Tensor:
     """(H, W, 3) uint8 → (1, 3, 384, 384) float32 in [0, 1]
 
@@ -72,6 +75,14 @@ def preprocess_obs(
     """
     if rotate:
         obs_image = np.rot90(obs_image, k=2)
+
+    # Center crop at 90% scale(To handle random crop during training)
+    if center_crop:
+        h, w = obs_image.shape[:2]
+        crop_h, crop_w = int(h * 0.9), int(w * 0.9)
+        start_h, start_w = (h - crop_h) // 2, (w - crop_w) // 2
+        obs_image = obs_image[start_h : start_h + crop_h, start_w : start_w + crop_w]
+
     image = (
         torch.from_numpy(np.ascontiguousarray(obs_image)).permute(2, 0, 1).float()
         / 255.0
@@ -158,6 +169,7 @@ def run_episode(
     debug_steps: int = 0,
     debug_every: int = 0,
     action_normalizer: ActionNormalizer | None = None,
+    center_crop: bool = True,
 ) -> tuple:
     """Returns (success, frames). frames is an empty list when record=False.
 
@@ -186,7 +198,9 @@ def run_episode(
         # on dim=1 gives (1, V, 3, 384, 384), which VLAModel.encode_image encodes
         # per view and concatenates along the token dimension.
         views = [
-            preprocess_obs(obs[f"{cam}_image"], device, rotate=rot)
+            preprocess_obs(
+                obs[f"{cam}_image"], device, rotate=rot, center_crop=center_crop
+            )
             for cam, rot in EVAL_VIEWS
         ]
         image = torch.stack(views, dim=1)
@@ -250,6 +264,7 @@ def evaluate(
     video_mode: str = "all",
     debug_actions: int = 0,
     debug_every: int = 0,
+    center_crop: bool = True,
 ) -> float:
     model = load_model(model_path, llm_model_name, device)
     tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
@@ -326,6 +341,7 @@ def evaluate(
                 debug_steps=debug_actions if (task_id == 0 and ep == 0) else 0,
                 debug_every=debug_every if (task_id == 0 and ep == 0) else 0,
                 action_normalizer=action_normalizer,
+                center_crop=center_crop,
             )
             successes += int(success)
             status = "SUCCESS" if success else "FAIL"
@@ -419,6 +435,12 @@ if __name__ == "__main__":
         "episode (inspect the slow region near the object: xyz deltas collapsing "
         "to ~0 or the gripper never closing)",
     )
+    parser.add_argument(
+        "--no_center_crop",
+        action="store_false",
+        dest="center_crop",
+        help="Disable center crop at 90% scale (default is enabled)",
+    )
     args = parser.parse_args()
 
     evaluate(
@@ -433,4 +455,5 @@ if __name__ == "__main__":
         video_mode=args.video_mode,
         debug_actions=args.debug_actions,
         debug_every=args.debug_every,
+        center_crop=args.center_crop,
     )
