@@ -62,9 +62,9 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
         action_token_ids_list.append(labels)
         task_names.append(sample["task_name"])
 
-    # Stack images
+    # Stack images (take first camera view from each sample)
     batch_images = torch.stack(
-        [img[:, 0] if img.dim() == 4 else img for img in images_list]
+        [img[0] if img.dim() == 4 else img for img in images_list]
     )  # (B, 3, H, W)
 
     # Convert to PIL for processor
