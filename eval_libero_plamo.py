@@ -11,6 +11,7 @@ import imageio
 import numpy as np
 import torch
 from peft import PeftModel
+from PIL import Image
 from transformers import AutoTokenizer
 
 # Fix libero namespace collision (libero/ submodule vs installed package).
@@ -153,6 +154,9 @@ def run_episode(
             crop_h, crop_w = int(h * 0.9), int(w * 0.9)
             start_h, start_w = (h - crop_h) // 2, (w - crop_w) // 2
             processed_image = processed_image[start_h : start_h + crop_h, start_w : start_w + crop_w]
+
+        # Convert numpy array to PIL Image for processor
+        processed_image = Image.fromarray(processed_image)
 
         # Use Plamo processor for consistent image processing
         processor_output = model.processor(
