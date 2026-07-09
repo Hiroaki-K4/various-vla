@@ -144,8 +144,7 @@ def save_video(frames: list, path: str, fps: int = 20) -> None:
 def run_episode(
     env: OffScreenRenderEnv,
     model: PlamoVLAModel,
-    input_ids: torch.Tensor,
-    attention_mask: torch.Tensor,
+    prompt: str,
     action_tokenizer: ActionTokenizer,
     init_state: np.ndarray,
     max_steps: int,
@@ -168,25 +167,30 @@ def run_episode(
     frames: list = []
     success = False
     for step in range(max_steps):
-        # Process image for Plamo
-        views = [
-            preprocess_obs(
-                obs[f"{cam}_image"], device, rotate=rot, center_crop=center_crop
-            )
-            for cam, rot in EVAL_VIEWS
-        ]
-        image = torch.stack(views, dim=1)  # (1, V, 3, 384, 384)
         raw_image = obs[f"{EVAL_VIEWS[0][0]}_image"]
 
-        with torch.no_grad():
-            # Debug: Check input shapes
-            if step == 0:
-                print(f"[Debug] input_ids shape: {input_ids.shape}")
-                print(f"[Debug] attention_mask shape: {attention_mask.shape}")
-                print(f"[Debug] image shape: {image.shape}, using image[:, 0] shape: {image[:, 0].shape}")
+        # Rotate and center crop if needed
+        if center_crop:
+            h, w = raw_image.shape[:2]
+            crop_h, crop_w = int(h * 0.9), int(w * 0.9)
+            start_h, start_w = (h - crop_h) // 2, (w - crop_w) // 2
+            processed_image = raw_image[start_h : start_h + crop_h, start_w : start_w + crop_w]
+        else:
+            processed_image = raw_image
 
+        # Use Plamo processor for consistent image processing
+        processor_output = model.processor(
+            text=prompt,
+            images=processed_image,
+            return_tensors="pt"
+        )
+        input_ids = processor_output["input_ids"].to(device)
+        attention_mask = processor_output["attention_mask"].to(device)
+        pixel_values = processor_output["pixel_values"].to(device)
+
+        with torch.no_grad():
             output_ids = model.generate(
-                input_ids, attention_mask, image[:, 0], max_new_tokens=7
+                input_ids, attention_mask, pixel_values, max_new_tokens=7
             )
 
         action = action_tokenizer.decode_model_output(output_ids, action_dim=7)
@@ -286,9 +290,6 @@ def evaluate(
         init_states = task_suite.get_task_init_states(task_id)
 
         prompt = PROMPT_TEMPLATE.format(instruction=task.language)
-        enc = tokenizer(prompt, return_tensors="pt", add_special_tokens=True)
-        input_ids = enc["input_ids"].to(device)
-        attention_mask = enc["attention_mask"].to(device)
 
         successes = 0
         for ep in range(n_episodes):
@@ -297,8 +298,7 @@ def evaluate(
             success, frames = run_episode(
                 env,
                 model,
-                input_ids,
-                attention_mask,
+                prompt,
                 action_tokenizer,
                 init_state,
                 max_steps,
