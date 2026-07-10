@@ -137,7 +137,7 @@ def run_episode(
     debug_steps: int = 0,
     debug_every: int = 0,
     action_normalizer: ActionNormalizer | None = None,
-    center_crop: bool = False,
+    center_crop: bool = True,
 ) -> tuple:
     """Run a single episode and return (success, frames)."""
     init_state = np.asarray(init_state)
@@ -252,7 +252,7 @@ def evaluate(
     video_mode: str = "all",
     debug_actions: int = 0,
     debug_every: int = 0,
-    center_crop: bool = False,
+    center_crop: bool = True,
 ) -> float:
     """Evaluate model on task suite."""
     model = load_model(model_path, device)
@@ -393,10 +393,10 @@ if __name__ == "__main__":
         help="Debug every N steps",
     )
     parser.add_argument(
-        "--center-crop",
-        action="store_true",
+        "--no-center-crop",
+        action="store_false",
         dest="center_crop",
-        help="Enable center crop at 90% scale (default is disabled to match training)",
+        help="Disable center crop at 90% scale (default enabled, as used during training with image_aug=True)",
     )
     args = parser.parse_args()
 
