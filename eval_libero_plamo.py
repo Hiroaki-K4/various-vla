@@ -33,27 +33,29 @@ EVAL_VIEWS = (("agentview", True),)
 
 
 def load_model(model_path: str, device: torch.device) -> PlamoVLAModel:
-    """Load Plamo-VL model with LoRA adapter or PyTorch checkpoint."""
+    """Load Plamo-VL model with LoRA adapter (required format)."""
     print("Loading Plamo-2.1-2B-VL base model...")
     model = PlamoVLAModel(device=device)
 
-    if os.path.exists(model_path):
-        # Check if it's a LoRA adapter directory
-        adapter_config_path = os.path.join(model_path, "adapter_config.json")
-        if os.path.exists(adapter_config_path):
-            print(f"Loading LoRA adapter from {model_path}...")
-            model.model = PeftModel.from_pretrained(model.model, model_path)
-        else:
-            # Try loading as a PyTorch checkpoint
-            model_pth_path = os.path.join(model_path, "model.pth")
-            if os.path.exists(model_pth_path):
-                print(f"Loading PyTorch checkpoint from {model_pth_path}...")
-                state_dict = torch.load(model_pth_path, map_location=device)
-                model.model.load_state_dict(state_dict, strict=False)
-            elif os.path.isfile(model_path) and model_path.endswith(".pth"):
-                print(f"Loading PyTorch checkpoint from {model_path}...")
-                state_dict = torch.load(model_path, map_location=device)
-                model.model.load_state_dict(state_dict, strict=False)
+    # Check if it's a LoRA adapter directory (required)
+    adapter_config_path = os.path.join(model_path, "adapter_config.json")
+    adapter_model_path = os.path.join(model_path, "adapter_model.bin")
+
+    if not os.path.exists(adapter_config_path):
+        raise FileNotFoundError(
+            f"LoRA adapter config not found: {adapter_config_path}\n"
+            f"Expected LoRA adapter directory structure with adapter_config.json"
+        )
+
+    if not os.path.exists(adapter_model_path):
+        raise FileNotFoundError(
+            f"LoRA adapter weights not found: {adapter_model_path}\n"
+            f"Expected LoRA adapter directory structure with adapter_model.bin"
+        )
+
+    print(f"Loading LoRA adapter from {model_path}...")
+    model.model = PeftModel.from_pretrained(model.model, model_path)
+    print("LoRA adapter loaded successfully")
 
     model.eval()
     return model
@@ -234,14 +236,15 @@ def evaluate(
     tokenizer = model.tokenizer
     action_tokenizer = ActionTokenizer(tokenizer, n_bins=256)
 
-    stats_path = f"{model_path}_action_stats.json"
+    stats_path = os.path.join(model_path, "action_stats.json")
     if os.path.exists(stats_path):
         action_normalizer = ActionNormalizer.load(stats_path)
         print(f"Loaded action stats from {stats_path}")
     else:
-        action_normalizer = None
-        print(
-            f"WARNING: {stats_path} not found; running without action denormalization."
+        raise FileNotFoundError(
+            f"Action stats file not found: {stats_path}\n"
+            f"Required for correct action denormalization. "
+            f"Ensure it was saved during training."
         )
 
     benchmark_dict = benchmark.get_benchmark_dict()

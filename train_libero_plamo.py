@@ -253,7 +253,7 @@ def train(
                 p.requires_grad = False
             print("Vision encoder frozen")
 
-    # Apply LoRA to language model components
+    # Apply LoRA to language model components (required)
     lora_config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -262,9 +262,11 @@ def train(
         init_lora_weights="gaussian",
     )
 
-    # Note: Plamo's structure may differ - adjust target_modules if needed
+    # Apply LoRA adapter
     model.model = get_peft_model(model.model, lora_config)
     model.model.config.use_cache = False
+    print(f"LoRA adapter applied: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}")
+    model.model.print_trainable_parameters()
 
     # Get tokenizer (use Plamo's built-in tokenizer)
     tokenizer = model.tokenizer
@@ -278,8 +280,12 @@ def train(
         dataset_dir=dataset_dir, split="train", val_demos=val_demos
     )
     print(action_normalizer)
+
+    # Save action stats for later use in evaluation
     if save_model_path is not None:
-        stats_path = f"{save_model_path}_action_stats.json"
+        # Create directory early to save stats
+        os.makedirs(save_model_path, exist_ok=True)
+        stats_path = os.path.join(save_model_path, "action_stats.json")
         action_normalizer.save(stats_path)
         print(f"Saved action stats to {stats_path}")
 
@@ -407,8 +413,15 @@ def train(
                     patience_counter = 0
                     if save_model_path is not None:
                         os.makedirs(save_model_path, exist_ok=True)
-                        model.save_checkpoint(f"{save_model_path}/model.pth")
-                        print("New best model saved!")
+                        # Save only LoRA adapter (strict format)
+                        model.save_checkpoint(save_model_path)
+                        # Verify LoRA files exist
+                        adapter_config = os.path.join(save_model_path, "adapter_config.json")
+                        adapter_model = os.path.join(save_model_path, "adapter_model.bin")
+                        if os.path.exists(adapter_config) and os.path.exists(adapter_model):
+                            print("✓ New best LoRA adapter saved!")
+                        else:
+                            print("WARNING: LoRA adapter files not properly saved!")
                 else:
                     patience_counter += 1
                     print(f"No improvement. Patience: {patience_counter}/{patience}")

@@ -125,8 +125,18 @@ class PlamoVLAModel(nn.Module):
         return output_ids
 
     def save_checkpoint(self, path):
-        torch.save(self.state_dict(), path)
-        print(f"Checkpoint saved to {path}")
+        from peft import PeftModel
+        import os
+
+        if not isinstance(self.model, PeftModel):
+            raise ValueError(
+                "Model must be a PeftModel (LoRA adapter) to save. "
+                "Ensure get_peft_model() was applied during initialization."
+            )
+
+        os.makedirs(path, exist_ok=True)
+        self.model.save_pretrained(path)
+        print(f"LoRA adapter saved to {path}")
 
 
 if __name__ == "__main__":
