@@ -449,16 +449,21 @@ def train(
                         os.makedirs(save_model_path, exist_ok=True)
                         # Save only LoRA adapter (strict format)
                         model.save_checkpoint(save_model_path)
-                        # Verify LoRA files exist
+                        # Verify LoRA files exist (support both .bin and .safetensors)
                         adapter_config = os.path.join(
                             save_model_path, "adapter_config.json"
                         )
-                        adapter_model = os.path.join(
+                        adapter_model_bin = os.path.join(
                             save_model_path, "adapter_model.bin"
                         )
-                        if os.path.exists(adapter_config) and os.path.exists(
-                            adapter_model
-                        ):
+                        adapter_model_safetensors = os.path.join(
+                            save_model_path, "adapter_model.safetensors"
+                        )
+                        has_config = os.path.exists(adapter_config)
+                        has_model = os.path.exists(adapter_model_bin) or os.path.exists(
+                            adapter_model_safetensors
+                        )
+                        if has_config and has_model:
                             print("✓ New best LoRA adapter saved!")
                         else:
                             print("WARNING: LoRA adapter files not properly saved!")
