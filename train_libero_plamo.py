@@ -52,14 +52,22 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
     for sample in batch:
         images_list.append(sample["image"])  # (V, 3, H, W)
 
-        # Text is prompt + action tokens (already in token form)
+        # input_ids = prompt_ids + action_token_ids (7 tokens)
+        # labels = [-100, -100, ..., -100, action_token_0, ..., action_token_6]
         input_ids = sample["input_ids"]
         labels = sample["labels"]
 
-        # Decode input_ids to get text
-        text = tokenizer.decode(input_ids, skip_special_tokens=False)
+        # Extract action tokens (last 7 tokens where labels != -100)
+        action_dim = 7
+        prompt_ids = input_ids[:-action_dim]
+
+        # Decode only prompt part (without action tokens)
+        # This avoids polluting the text with action token representations
+        text = tokenizer.decode(prompt_ids, skip_special_tokens=False)
         text_list.append(text)
-        action_token_ids_list.append(labels)
+
+        # Store action token ids for label reconstruction
+        action_token_ids_list.append(labels[-action_dim:])
         task_names.append(sample["task_name"])
 
     # Stack images (take first camera view from each sample)
@@ -68,6 +76,8 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
     )  # (B, 3, H, W)
 
     # Process each sample individually with Plamo processor (expects single text + image)
+    # Key: processor only receives prompt text, not action tokens
+    # We'll append action tokens to input_ids after processing for proper teacher forcing
     batch_processed = []
     for i in range(len(batch)):
         pil_image = _tensor_to_pil(batch_images[i])
@@ -79,18 +89,39 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
         )
         batch_processed.append(processed_sample)
 
-    # Pad input_ids to same length across batch
+    # Append action tokens to input_ids for proper teacher forcing
+    # Structure: [image_tokens] + [prompt_tokens] + [action_tokens]
+    for i, p in enumerate(batch_processed):
+        action_tokens = action_token_ids_list[i]  # (7,)
+        input_ids = p["input_ids"].squeeze(0)  # (prompt_len,)
+        attention_mask = p["attention_mask"].squeeze(0)  # (prompt_len,)
+
+        # Concatenate action tokens
+        input_ids_with_action = torch.cat([input_ids, action_tokens])
+        attention_mask_with_action = torch.cat(
+            [
+                attention_mask,
+                torch.ones(action_tokens.numel(), dtype=attention_mask.dtype),
+            ]
+        )
+
+        p["input_ids"] = input_ids_with_action.unsqueeze(0)
+        p["attention_mask"] = attention_mask_with_action.unsqueeze(0)
+
+    # Extract padded sequences
     input_ids_list = [p["input_ids"].squeeze(0) for p in batch_processed]
     attention_mask_list = [p["attention_mask"].squeeze(0) for p in batch_processed]
 
     # Pad input_ids and attention_mask to max length
     max_seq_len = max(ids.shape[0] for ids in input_ids_list)
-    input_ids_padded = torch.full((len(batch), max_seq_len), processor.tokenizer.pad_token_id, dtype=torch.long)
+    input_ids_padded = torch.full(
+        (len(batch), max_seq_len), processor.tokenizer.pad_token_id, dtype=torch.long
+    )
     attention_mask_padded = torch.zeros((len(batch), max_seq_len), dtype=torch.long)
 
     for i, (ids, mask) in enumerate(zip(input_ids_list, attention_mask_list)):
-        input_ids_padded[i, :ids.shape[0]] = ids
-        attention_mask_padded[i, :mask.shape[0]] = mask
+        input_ids_padded[i, : ids.shape[0]] = ids
+        attention_mask_padded[i, : mask.shape[0]] = mask
 
     # Collect pixel_values (concatenated across batch)
     pixel_values_list = [p["pixel_values"] for p in batch_processed]
@@ -102,11 +133,9 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
         "pixel_values": pixel_values,
     }
 
-    # Get prompt length before action tokens (from original input_ids)
-    # After processor, input_ids has: [image_tokens] + [prompt] + [action_tokens]
-    # We need to mask prompt but not image_tokens, and keep action tokens
-
-    # Create labels: only supervise action tokens
+    # Create labels: supervise action tokens, mask everything else (image + prompt)
+    # input_ids structure: [image_tokens] + [prompt_tokens] + [action_tokens]
+    # labels structure:    [-100        ] + [-100           ] + [action_tokens]
     batch_size = processed["input_ids"].shape[0]
     seq_len = processed["input_ids"].shape[1]
 
@@ -114,19 +143,22 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
         (batch_size, seq_len), fill_value=ignore_index, dtype=torch.long
     )
 
-    # Use actual action_token_ids collected from dataloader
-    # Each sample has action_token_ids which we collected earlier
+    # Supervise only action tokens at the end of sequence
+    # Since we appended action tokens after processor output, we know:
+    # - last action_dim tokens are the action tokens
+    action_dim = 7
     for b in range(batch_size):
-        action_tokens = action_token_ids_list[b]
-        action_dim = action_tokens.numel()
+        action_tokens = action_token_ids_list[b]  # (7,)
 
-        # Find actual sequence length from attention_mask (last 1 position)
+        # Find last real token position
         attention_mask = processed["attention_mask"][b]
-        last_real_pos = attention_mask.sum().item()
-        end = int(last_real_pos)
-        start = end - action_dim
+        last_real_pos = int(attention_mask.sum().item())
 
-        # Supervise action tokens at their actual position
+        # Action tokens are at the end, right before padding
+        start = last_real_pos - action_dim
+        end = last_real_pos
+
+        # Place action token labels only at the action positions
         if start >= 0:
             labels_batch[b, start:end] = action_tokens
 
@@ -265,7 +297,9 @@ def train(
     # Apply LoRA adapter
     model.model = get_peft_model(model.model, lora_config)
     model.model.config.use_cache = False
-    print(f"LoRA adapter applied: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}")
+    print(
+        f"LoRA adapter applied: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}"
+    )
     model.model.print_trainable_parameters()
 
     # Get tokenizer (use Plamo's built-in tokenizer)
@@ -416,9 +450,15 @@ def train(
                         # Save only LoRA adapter (strict format)
                         model.save_checkpoint(save_model_path)
                         # Verify LoRA files exist
-                        adapter_config = os.path.join(save_model_path, "adapter_config.json")
-                        adapter_model = os.path.join(save_model_path, "adapter_model.bin")
-                        if os.path.exists(adapter_config) and os.path.exists(adapter_model):
+                        adapter_config = os.path.join(
+                            save_model_path, "adapter_config.json"
+                        )
+                        adapter_model = os.path.join(
+                            save_model_path, "adapter_model.bin"
+                        )
+                        if os.path.exists(adapter_config) and os.path.exists(
+                            adapter_model
+                        ):
                             print("✓ New best LoRA adapter saved!")
                         else:
                             print("WARNING: LoRA adapter files not properly saved!")

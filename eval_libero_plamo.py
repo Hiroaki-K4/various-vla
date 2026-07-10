@@ -1,4 +1,6 @@
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "libero"))
 
 import argparse
@@ -10,6 +12,7 @@ import cv2
 import imageio
 import numpy as np
 import torch
+import torch.nn.functional as F
 from peft import PeftModel
 from PIL import Image
 from transformers import AutoTokenizer
@@ -39,18 +42,22 @@ def load_model(model_path: str, device: torch.device) -> PlamoVLAModel:
 
     # Check if it's a LoRA adapter directory (required)
     adapter_config_path = os.path.join(model_path, "adapter_config.json")
-    adapter_model_path = os.path.join(model_path, "adapter_model.bin")
+    # PEFT v0.6+: adapter_model.safetensors, v0.6-: adapter_model.bin
+    adapter_model_bin = os.path.join(model_path, "adapter_model.bin")
+    adapter_model_safetensors = os.path.join(model_path, "adapter_model.safetensors")
 
     if not os.path.exists(adapter_config_path):
         raise FileNotFoundError(
             f"LoRA adapter config not found: {adapter_config_path}\n"
-            f"Expected LoRA adapter directory structure with adapter_config.json"
+            f"Expected LoRA adapter directory with adapter_config.json"
         )
 
-    if not os.path.exists(adapter_model_path):
+    if not os.path.exists(adapter_model_bin) and not os.path.exists(
+        adapter_model_safetensors
+    ):
         raise FileNotFoundError(
-            f"LoRA adapter weights not found: {adapter_model_path}\n"
-            f"Expected LoRA adapter directory structure with adapter_model.bin"
+            f"LoRA adapter weights not found: {adapter_model_bin} or {adapter_model_safetensors}\n"
+            f"Expected PEFT v0.6+ (safetensors) or v0.6- (bin)"
         )
 
     print(f"Loading LoRA adapter from {model_path}...")
@@ -59,8 +66,6 @@ def load_model(model_path: str, device: torch.device) -> PlamoVLAModel:
 
     model.eval()
     return model
-
-
 
 
 def annotate_frame(
@@ -132,7 +137,7 @@ def run_episode(
     debug_steps: int = 0,
     debug_every: int = 0,
     action_normalizer: ActionNormalizer | None = None,
-    center_crop: bool = True,
+    center_crop: bool = False,
 ) -> tuple:
     """Run a single episode and return (success, frames)."""
     init_state = np.asarray(init_state)
@@ -155,16 +160,34 @@ def run_episode(
             h, w = processed_image.shape[:2]
             crop_h, crop_w = int(h * 0.9), int(w * 0.9)
             start_h, start_w = (h - crop_h) // 2, (w - crop_w) // 2
-            processed_image = processed_image[start_h : start_h + crop_h, start_w : start_w + crop_w]
+            processed_image = processed_image[
+                start_h : start_h + crop_h, start_w : start_w + crop_w
+            ]
 
-        # Convert numpy array to PIL Image for processor
-        processed_image = Image.fromarray(processed_image)
+        # Resize to 384×384 using same method as training (F.interpolate with bilinear, align_corners=False)
+        # Training: HDF5 128×128 → resized to 384×384
+        # Evaluation: env 256×256 → resized to 384×384
+        img_tensor = (
+            torch.from_numpy(np.ascontiguousarray(processed_image))
+            .permute(2, 0, 1)
+            .float()
+            / 255.0
+        )
+        img_tensor = F.interpolate(
+            img_tensor.unsqueeze(0),
+            size=(384, 384),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze(0)
+
+        # Convert back to PIL Image for processor
+        processed_image = Image.fromarray(
+            (img_tensor.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
+        )
 
         # Use Plamo processor for consistent image processing
         processor_output = model.processor(
-            text=prompt,
-            images=processed_image,
-            return_tensors="pt"
+            text=prompt, images=processed_image, return_tensors="pt"
         )
         input_ids = processor_output["input_ids"].to(device)
         attention_mask = processor_output["attention_mask"].to(device)
@@ -229,7 +252,7 @@ def evaluate(
     video_mode: str = "all",
     debug_actions: int = 0,
     debug_every: int = 0,
-    center_crop: bool = True,
+    center_crop: bool = False,
 ) -> float:
     """Evaluate model on task suite."""
     model = load_model(model_path, device)
@@ -301,12 +324,12 @@ def evaluate(
             )
             successes += int(success)
             status = "SUCCESS" if success else "FAIL"
-            print(
-                f"  Task {task_id:2d} ep {ep + 1:2d}/{n_episodes}  {status}"
-            )
+            print(f"  Task {task_id:2d} ep {ep + 1:2d}/{n_episodes}  {status}")
 
             if record:
-                video_name = f"{task_suite_name}_task{task_id:02d}_ep{ep:02d}_{status}.mp4"
+                video_name = (
+                    f"{task_suite_name}_task{task_id:02d}_ep{ep:02d}_{status}.mp4"
+                )
                 if video_mode == "fail" and success:
                     pass  # Don't save successful episodes in "fail" mode
                 else:
@@ -339,15 +362,11 @@ if __name__ == "__main__":
         default="libero_spatial",
         help="Task suite name (libero_spatial, libero_object, libero_goal)",
     )
-    parser.add_argument(
-        "--n-episodes", type=int, default=10, help="Episodes per task"
-    )
+    parser.add_argument("--n-episodes", type=int, default=10, help="Episodes per task")
     parser.add_argument(
         "--max-steps", type=int, default=1000, help="Max steps per episode"
     )
-    parser.add_argument(
-        "--save-video", action="store_true", help="Save episode videos"
-    )
+    parser.add_argument("--save-video", action="store_true", help="Save episode videos")
     parser.add_argument(
         "--video-dir",
         type=str,
@@ -374,10 +393,10 @@ if __name__ == "__main__":
         help="Debug every N steps",
     )
     parser.add_argument(
-        "--no_center_crop",
-        action="store_false",
+        "--center-crop",
+        action="store_true",
         dest="center_crop",
-        help="Disable center crop at 90% scale (default is enabled)",
+        help="Enable center crop at 90% scale (default is disabled to match training)",
     )
     args = parser.parse_args()
 

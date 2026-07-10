@@ -125,8 +125,9 @@ class PlamoVLAModel(nn.Module):
         return output_ids
 
     def save_checkpoint(self, path):
-        from peft import PeftModel
         import os
+
+        from peft import PeftModel
 
         if not isinstance(self.model, PeftModel):
             raise ValueError(
@@ -136,6 +137,7 @@ class PlamoVLAModel(nn.Module):
 
         os.makedirs(path, exist_ok=True)
         self.model.save_pretrained(path)
+        # Saves: adapter_config.json + adapter_model.safetensors (PEFT v0.6+) or .bin
         print(f"LoRA adapter saved to {path}")
 
 
