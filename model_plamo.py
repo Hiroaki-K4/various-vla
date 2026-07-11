@@ -34,7 +34,7 @@ class PlamoVLAModel(nn.Module):
         self.model = AutoModelForCausalLM.from_pretrained(
             plamo_model_name,
             low_cpu_mem_usage=True,
-            torch_dtype=torch.float32,
+            torch_dtype=torch.float16,
             trust_remote_code=True,
         ).to(device)
 

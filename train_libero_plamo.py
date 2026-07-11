@@ -2,6 +2,8 @@ import os
 import random
 from functools import partial
 
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import numpy as np
 import torch
 import torch.nn.functional as F
