@@ -254,7 +254,8 @@ if __name__ == "__main__":
     train(
         # Multi-task learning: spatial + object + goal (256x256 resolution)
         dataset_dir=[
-            "libero/libero/datasets/libero_spatial_256",
+            "libero/libero/datasets/libero_spatial_384",
+            # "libero/libero/datasets/libero_spatial_256",
             # "libero/libero/datasets/libero_object_256",
             # "libero/libero/datasets/libero_goal_256",
         ],
@@ -272,6 +273,6 @@ if __name__ == "__main__":
         lora_alpha=128,
         val_demos=5,
         # Two-view input (OpenVLA-OFT recipe): third-person + wrist camera.
-        cameras=("agentview_rgb",),
-        image_aug=True,
+        cameras=("agentview_rgb", "eye_in_hand_rgb"),
+        image_aug=False,
     )
