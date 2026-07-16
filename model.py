@@ -7,13 +7,14 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 class CrossAttentionFusion(nn.Module):
     """
-    Merge features of multiple views
+    Merge features of multiple views using cross-attention.
+    For memory efficiency with 2+ views, use attn_dropout=0.0 during training.
     """
-    def __init__(self, hidden_dim, num_heads=8, num_layers=2):
+    def __init__(self, hidden_dim, num_heads=8, num_layers=2, attn_dropout=0.0):
         super().__init__()
         self.layers = nn.ModuleList([
             nn.MultiheadAttention(
-                hidden_dim, num_heads, batch_first=True, dropout=0.1
+                hidden_dim, num_heads, batch_first=True, dropout=attn_dropout
             )
             for _ in range(num_layers)
         ])
@@ -186,6 +187,9 @@ class VLAModel(nn.Module):
             for v in range(V):
                 view_features = self._encode_view(images[:, v, :, :, :])  # (B, N, vision_dim)
                 features_list.append(view_features)
+                # Memory optimization: clear intermediate GPU cache between views
+                if v < V - 1:
+                    torch.cuda.empty_cache()
 
             if self.multi_view_fusion is not None:
                 fused = self.multi_view_fusion(features_list)
@@ -203,8 +207,6 @@ class VLAModel(nn.Module):
             images, size=(378, 378), mode="bilinear", align_corners=False
         )
         dino_input = (dino_input - self._dino_mean) / self._dino_std
-        dino_out = self.dino.forward_features(dino_input)
-        # dino_feats = dino_out["x_norm_patchtokens"]  # (B, 729, 1024)
         dino_feats = self.dino.get_intermediate_layers(
             dino_input,
             n=[len(self.dino.blocks) - 2],
@@ -215,7 +217,6 @@ class VLAModel(nn.Module):
         # SigLIP runs natively at 384 (floor(384/14)=27 patches per side) and
         # was pretrained with mean=std=0.5 normalization.
         siglip_input = (images - self._siglip_mean) / self._siglip_std
-        # siglip_feats = self.siglip.forward_features(siglip_input)  # (B, 729, 1152)
         siglip_feats = self.siglip.get_intermediate_layers(
             siglip_input,
             n=[len(self.siglip.blocks) - 2],
