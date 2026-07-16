@@ -90,12 +90,13 @@ def train(
     warmup_ratio: float = 0.05,
     seed: int = 42,
     image_aug: bool = True,
+    use_multi_view_fusion: bool = True,
 ):
     set_seed(seed)
     print(f"Random seed set to {seed}")
 
     print("Loading models...")
-    model = VLAModel(llm_model_name, device=device)
+    model = VLAModel(llm_model_name, device=device, use_multi_view_fusion=use_multi_view_fusion)
 
     # Freeze vision encoders (DINOv2 + SigLIP): keep pretrained features fixed
     for p in model.dino.parameters():
@@ -275,4 +276,5 @@ if __name__ == "__main__":
         # Two-view input (OpenVLA-OFT recipe): third-person + wrist camera.
         cameras=("agentview_rgb", "eye_in_hand_rgb"),
         image_aug=False,
+        use_multi_view_fusion=True,
     )

@@ -5,6 +5,59 @@ import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+class CrossAttentionFusion(nn.Module):
+    """
+    Merge features of multiple views
+    """
+    def __init__(self, hidden_dim, num_heads=8, num_layers=2):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            nn.MultiheadAttention(
+                hidden_dim, num_heads, batch_first=True, dropout=0.1
+            )
+            for _ in range(num_layers)
+        ])
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(hidden_dim) for _ in range(num_layers)
+        ])
+        self.ffn = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_dim, 4 * hidden_dim),
+                nn.GELU(),
+                nn.Linear(4 * hidden_dim, hidden_dim),
+            )
+            for _ in range(num_layers)
+        ])
+        self.ffn_norms = nn.ModuleList([
+            nn.LayerNorm(hidden_dim) for _ in range(num_layers)
+        ])
+
+    def forward(self, feature_list):
+        """
+        feature_list: List [view1, view2, ...], (B, N, dim) shape
+        returns: (B, V*N, dim)
+        """
+        if len(feature_list) == 1:
+            return feature_list[0]
+        
+        # Concat all views: (B, V*N, dim)
+        x = torch.cat(feature_list, dim=1)
+
+        # Apply cross-attention layers
+        for attn_layer, norm, ffn, ffn_norm in zip(
+            self.layers, self.norms, self.ffn, self.ffn_norms
+        ):
+            # Self-attention(Intruction among all views)
+            x_attn, _ = attn_layer(x, x, x)
+            x = norm(x + x_attn)  # Residual + LayerNorm
+
+            # Feedforward Network
+            x_ffn = ffn(x)
+            x = ffn_norm(x + x_ffn)  # Residual + LayerNorm
+
+        return x
+
+
 class VLAModel(nn.Module):
     def __init__(
         self,
@@ -13,6 +66,7 @@ class VLAModel(nn.Module):
         dino_checkpoint_path=None,
         siglip_checkpoint_path=None,
         device=None,
+        use_multi_view_fusion=False,
     ):
         super().__init__()
         if device is None:
@@ -34,6 +88,15 @@ class VLAModel(nn.Module):
         dino_dim = self.dino.num_features  # 1024
         siglip_dim = self.siglip.num_features  # 1152
         vision_dim = dino_dim + siglip_dim  # 2176
+
+        if use_multi_view_fusion:
+            self.multi_view_fusion = CrossAttentionFusion(
+                vision_dim, num_heads=8, num_layers=2
+            ).to(device)
+        else:
+            self.multi_view_fusion = None
+
+        self.use_multi_view_fusion = use_multi_view_fusion
 
         # Language model (fp32 master weights; fp16 is applied via autocast)
         self.llm = AutoModelForCausalLM.from_pretrained(
@@ -119,9 +182,17 @@ class VLAModel(nn.Module):
         """
         if images.dim() == 5:
             B, V = images.shape[:2]
-            flat = images.reshape(B * V, *images.shape[2:])  # (B*V, 3, H, W)
-            feats = self._encode_view(flat)  # (B*V, N, vision_dim)
-            return feats.reshape(B, V * feats.shape[1], feats.shape[2])
+            features_list = []
+            for v in range(V):
+                view_features = self._encode_view(images[:, v, :, :, :])  # (B, N, vision_dim)
+                features_list.append(view_features)
+
+            if self.multi_view_fusion is not None:
+                fused = self.multi_view_fusion(features_list)
+                return fused
+            else:
+                return torch.cat(features_list, dim=1)
+
         return self._encode_view(images)
 
     def _encode_view(self, images: torch.Tensor) -> torch.Tensor:
@@ -276,18 +347,37 @@ class VLAModel(nn.Module):
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = VLAModel("meta-llama/Llama-3.2-1B", device=device)
+
+    print("=" * 50)
+    print("Test 1: Single-view (no fusion)")
+    print("=" * 50)
+    model = VLAModel("meta-llama/Llama-3.2-1B", device=device, use_multi_view_fusion=False)
 
     images = torch.randn(2, 3, 384, 384).to(device)
     input_ids = torch.randint(0, 1000, (2, 10)).to(device)
     attention_mask = torch.ones(2, 10, dtype=torch.long).to(device)
     labels = torch.randint(0, 1000, (2, 10)).to(device)
 
-    # Training
     out = model(images, input_ids, attention_mask, labels=labels)
-    print("loss:", out.loss)
-    print("logits:", out.logits.shape)  # (2, N+10, vocab_size)
-
-    # Inference
+    print(f"✓ Loss: {out.loss.item():.4f}")
+    print(f"✓ Logits shape: {out.logits.shape}")
     generated = model.generate(images, input_ids, attention_mask)
-    print("generated:", generated.shape)
+    print(f"✓ Generated shape: {generated.shape}")
+
+    print("\n" + "=" * 50)
+    print("Test 2: Multi-view (with fusion)")
+    print("=" * 50)
+    model = VLAModel("meta-llama/Llama-3.2-1B", device=device, use_multi_view_fusion=True)
+
+    # Multi-view: (B=2, V=2 views, C=3, H=384, W=384)
+    images_multi = torch.randn(2, 2, 3, 384, 384).to(device)
+
+    out = model(images_multi, input_ids, attention_mask, labels=labels)
+    print(f"✓ Loss: {out.loss.item():.4f}")
+    print(f"✓ Logits shape: {out.logits.shape}")
+    generated = model.generate(images_multi, input_ids, attention_mask)
+    print(f"✓ Generated shape: {generated.shape}")
+
+    print("\n" + "=" * 50)
+    print("✅ All tests passed!")
+    print("=" * 50)
