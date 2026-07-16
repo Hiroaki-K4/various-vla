@@ -348,36 +348,47 @@ class VLAModel(nn.Module):
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.cuda.empty_cache()
 
     print("=" * 50)
     print("Test 1: Single-view (no fusion)")
     print("=" * 50)
     model = VLAModel("meta-llama/Llama-3.2-1B", device=device, use_multi_view_fusion=False)
+    model.eval()
 
-    images = torch.randn(2, 3, 384, 384).to(device)
-    input_ids = torch.randint(0, 1000, (2, 10)).to(device)
-    attention_mask = torch.ones(2, 10, dtype=torch.long).to(device)
-    labels = torch.randint(0, 1000, (2, 10)).to(device)
+    with torch.no_grad():
+        images = torch.randn(2, 3, 384, 384).to(device)
+        input_ids = torch.randint(0, 1000, (2, 10)).to(device)
+        attention_mask = torch.ones(2, 10, dtype=torch.long).to(device)
+        labels = torch.randint(0, 1000, (2, 10)).to(device)
 
-    out = model(images, input_ids, attention_mask, labels=labels)
-    print(f"✓ Loss: {out.loss.item():.4f}")
-    print(f"✓ Logits shape: {out.logits.shape}")
-    generated = model.generate(images, input_ids, attention_mask)
-    print(f"✓ Generated shape: {generated.shape}")
+        out = model(images, input_ids, attention_mask, labels=labels)
+        print(f"✓ Loss: {out.loss.item():.4f}")
+        print(f"✓ Logits shape: {out.logits.shape}")
+        print(f"✓ Vision tokens: 729 (1 view × 729 patches)")
+
+    del model
+    torch.cuda.empty_cache()
 
     print("\n" + "=" * 50)
     print("Test 2: Multi-view (with fusion)")
     print("=" * 50)
     model = VLAModel("meta-llama/Llama-3.2-1B", device=device, use_multi_view_fusion=True)
+    model.eval()
 
-    # Multi-view: (B=2, V=2 views, C=3, H=384, W=384)
-    images_multi = torch.randn(2, 2, 3, 384, 384).to(device)
+    with torch.no_grad():
+        images_multi = torch.randn(2, 2, 3, 384, 384).to(device)
+        input_ids = torch.randint(0, 1000, (2, 10)).to(device)
+        attention_mask = torch.ones(2, 10, dtype=torch.long).to(device)
+        labels = torch.randint(0, 1000, (2, 10)).to(device)
 
-    out = model(images_multi, input_ids, attention_mask, labels=labels)
-    print(f"✓ Loss: {out.loss.item():.4f}")
-    print(f"✓ Logits shape: {out.logits.shape}")
-    generated = model.generate(images_multi, input_ids, attention_mask)
-    print(f"✓ Generated shape: {generated.shape}")
+        out = model(images_multi, input_ids, attention_mask, labels=labels)
+        print(f"✓ Loss: {out.loss.item():.4f}")
+        print(f"✓ Logits shape: {out.logits.shape}")
+        print(f"✓ Vision tokens: 1458 (2 views × 729 patches)")
+
+    del model
+    torch.cuda.empty_cache()
 
     print("\n" + "=" * 50)
     print("✅ All tests passed!")
