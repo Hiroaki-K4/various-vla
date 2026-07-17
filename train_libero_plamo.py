@@ -65,7 +65,7 @@ def _collate_fn_plamo(batch, processor, tokenizer, ignore_index: int = -100):
 
         # Decode only prompt part (without action tokens)
         # This avoids polluting the text with action token representations
-        text = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+        text = tokenizer.decode(prompt_ids, skip_special_tokens=True)
         text_list.append(text)
 
         # Store action token ids for label reconstruction
@@ -485,7 +485,7 @@ def train(
 if __name__ == "__main__":
     train(
         dataset_dir=[
-            "../../various-vla/libero/libero/datasets/libero_spatial_256",
+            "../../various-vla/libero/libero/datasets/libero_spatial_384",
         ],
         plamo_model_name="pfnet/plamo-2.1-2b-vl",
         batch_size=1,
@@ -495,12 +495,12 @@ if __name__ == "__main__":
         eval_interval=1000,
         num_workers=4,
         device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-        save_model_path="checkpoints/libero_plamo_vl_2b",
+        save_model_path="checkpoints_plamo_vl_2b_384_hand/libero_plamo_vl_2b",
         gradient_accumulation_steps=4,
         lora_r=32,
         lora_alpha=128,
         val_demos=5,
-        cameras=("agentview_rgb",),
-        image_aug=True,
+        cameras=("agentview_rgb", "eye_in_hand_rgb"),
+        image_aug=False,
         freeze_vision=True,
     )

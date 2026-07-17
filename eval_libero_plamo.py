@@ -32,7 +32,8 @@ from libero.libero.envs import OffScreenRenderEnv
 from libero_dataloader import PROMPT_TEMPLATE
 from model_plamo import PlamoVLAModel
 
-EVAL_VIEWS = (("agentview", True),)
+# EVAL_VIEWS = (("agentview", True), )
+EVAL_VIEWS = (("agentview", True), ("robot0_eye_in_hand", False))
 
 
 def load_model(model_path: str, device: torch.device) -> PlamoVLAModel:
@@ -291,8 +292,10 @@ def evaluate(
         env = OffScreenRenderEnv(
             bddl_file_name=task_bddl_file,
             camera_names=[cam for cam, _ in EVAL_VIEWS],
-            camera_heights=256,
-            camera_widths=256,
+            # camera_heights=256,
+            camera_heights=384,
+            # camera_widths=256,
+            camera_widths=384,
             use_camera_obs=True,
             ignore_done=True,
         )
@@ -301,6 +304,7 @@ def evaluate(
 
         init_states = task_suite.get_task_init_states(task_id)
 
+        # prompt = "<|plamo:bos|>" + PROMPT_TEMPLATE.format(instruction=task.language)
         prompt = PROMPT_TEMPLATE.format(instruction=task.language)
 
         successes = 0
@@ -353,7 +357,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model-path",
         type=str,
-        default="checkpoints_plamo_vl_2b/libero_plamo",
+        default="checkpoints_plamo_vl_2b_384_hand/libero_plamo",
         help="Path to model checkpoint",
     )
     parser.add_argument(
