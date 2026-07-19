@@ -1,7 +1,7 @@
 import torch
 from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 from action_tokenizer import ActionTokenizer
 from dataloader import get_dataloader
@@ -12,9 +12,10 @@ from model import VLAModel
 def evaluate(model, val_loader, device):
     model.eval()
     total_loss = 0
-    count = 0
+    batch_count = 0
 
     for batch_data in val_loader:
+        batch_count += 1
         images = batch_data["image"].to(device)
         input_ids = batch_data["input_ids"].to(device)
         attention_mask = batch_data["attention_mask"].to(device)
@@ -26,20 +27,10 @@ def evaluate(model, val_loader, device):
 
         if loss is not None:
             total_loss += loss.item()
-            count += 1
-        else:
-            print(f"Warning: loss is None in evaluate")
-            print(f"input_ids shape: {input_ids.shape}")
-            print(f"labels shape: {labels.shape}")
-            print(f"images shape: {images.shape}")
-            print(f"outputs keys: {dir(outputs)}")
-
-    if count == 0:
-        print("Warning: No valid batches processed in evaluate")
-        return float("inf")
 
     model.train()
-    return total_loss / count
+    avg_loss = total_loss / batch_count if batch_count > 0 else float("inf")
+    return avg_loss
 
 
 def train(
@@ -89,28 +80,40 @@ def train(
         tokenizer, at, batch_size=batch_size, split="val", num_workers=num_workers
     )
 
+    # Cosine schedule with warmup
+    total_steps = (num_epochs * len(train_loader)) // gradient_accumulation_steps
+    warmup_steps = max(1, int(total_steps * 0.05))
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
+    )
+    print(f"Scheduler: cosine warmup {warmup_steps} / {total_steps} steps")
+
     # Parameters for early stopping
     best_val_loss = float("inf")
     patience_counter = 0
 
     model.train()
+    # Frozen vision encoders stay in eval mode (no dropout / norm-stat updates)
+    model.dino.eval()
+    model.siglip.eval()
     print("Starting Training...")
 
     for epoch in range(num_epochs):
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
-        i = 0
-        for batch_data in pbar:
+        for i, batch_data in enumerate(pbar):
             images = batch_data["image"].to(device)
             input_ids = batch_data["input_ids"].to(device)
             attention_mask = batch_data["attention_mask"].to(device)
             labels = batch_data["labels"].to(device)
+
             with torch.amp.autocast("cuda", dtype=torch.float16):
                 outputs = model(images, input_ids, attention_mask, labels)
                 loss = outputs.loss / gradient_accumulation_steps
 
             if loss is None or torch.isnan(loss) or torch.isinf(loss):
                 print(f"Warning: invalid loss at step {i} (loss={loss})")
-                i += 1
                 continue
 
             scaler.scale(loss).backward()
@@ -119,15 +122,18 @@ def train(
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
-                torch.cuda.empty_cache()  # Clear memory cache
+                scheduler.step()
 
-            pbar.set_postfix({"train_loss": loss.item() * gradient_accumulation_steps})
+            pbar.set_postfix(
+                {"train_loss": f"{loss.item() * gradient_accumulation_steps:.4f}"}
+            )
 
-            i += 1
-            if i % eval_interval == 0 and (i % gradient_accumulation_steps == 0):
-                torch.cuda.empty_cache()  # Clear cache before evaluation
+            if (i + 1) % eval_interval == 0 and (
+                i + 1
+            ) % gradient_accumulation_steps == 0:
+                torch.cuda.empty_cache()
                 val_loss = evaluate(model, val_loader, device)
-                print(f"\nStep {i} | Val Loss: {val_loss:.4f}")
+                print(f"\nStep {i + 1} | Val Loss: {val_loss:.4f}")
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -153,22 +159,25 @@ def train(
 
                 if patience_counter >= patience:
                     print("Early stopping triggered!")
+                    print(f"Best Val Loss: {best_val_loss:.4f}")
                     return best_val_loss
 
     return best_val_loss
 
 
 if __name__ == "__main__":
-    llm_model_name = "meta-llama/Llama-3.2-1B"
+    llm_model_name = "meta-llama/Llama-3.2-3B"
     batch_size = 2
-    num_epochs = 1
+    num_epochs = 5
     lr_rate = 1e-5
-    patience = 3
+    patience = 5
     eval_interval = 1000
     num_workers = 4
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     save_model_path = "best_vla_model"
     gradient_accumulation_steps = 2
+    lora_r = 32
+    lora_alpha = 128
     train(
         llm_model_name,
         batch_size,
@@ -180,4 +189,6 @@ if __name__ == "__main__":
         device,
         save_model_path,
         gradient_accumulation_steps,
+        lora_r,
+        lora_alpha,
     )

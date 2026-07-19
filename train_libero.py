@@ -3,7 +3,7 @@ import random
 
 import numpy as np
 import torch
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model
 from tqdm import tqdm
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
@@ -90,12 +90,35 @@ def train(
     warmup_ratio: float = 0.05,
     seed: int = 42,
     image_aug: bool = True,
+    checkpoint_path: str | None = None,
 ):
     set_seed(seed)
     print(f"Random seed set to {seed}")
 
     print("Loading models...")
     model = VLAModel(llm_model_name, device=device)
+
+    # Load OpenX pretrained weights if provided
+    if checkpoint_path is not None:
+        print(f"Loading OpenX checkpoint from {checkpoint_path}")
+        # Load projector weights
+        projector_ckpt = torch.load(
+            f"{checkpoint_path}_projector.pth", map_location="cpu"
+        )
+        model.projector.load_state_dict(projector_ckpt)
+        del projector_ckpt
+
+        # Load vision encoder weights
+        dino_ckpt = torch.load(f"{checkpoint_path}_dino.pth", map_location="cpu")
+        model.dino.load_state_dict(dino_ckpt)
+        del dino_ckpt
+
+        siglip_ckpt = torch.load(f"{checkpoint_path}_siglip.pth", map_location="cpu")
+        model.siglip.load_state_dict(siglip_ckpt)
+        del siglip_ckpt
+
+        torch.cuda.empty_cache()
+        print("Vision encoder and projector weights loaded.")
 
     # Freeze vision encoders (DINOv2 + SigLIP): keep pretrained features fixed
     for p in model.dino.parameters():
@@ -110,7 +133,14 @@ def train(
         target_modules="all-linear",
         init_lora_weights="gaussian",
     )
-    model.llm = get_peft_model(model.llm, lora_config)
+
+    # Load OpenX LoRA weights if provided, otherwise create new LoRA
+    if checkpoint_path is not None:
+        print(f"Loading OpenX LoRA adapter from {checkpoint_path}")
+        model.llm = PeftModel.from_pretrained(model.llm, checkpoint_path)
+        print("OpenX LoRA adapter loaded.")
+    else:
+        model.llm = get_peft_model(model.llm, lora_config)
     model.llm.enable_input_require_grads()
     model.llm.gradient_checkpointing_enable()
     model.llm.config.use_cache = False
@@ -275,4 +305,6 @@ if __name__ == "__main__":
         # Two-view input (OpenVLA-OFT recipe): third-person + wrist camera.
         cameras=("agentview_rgb", "eye_in_hand_rgb"),
         image_aug=False,
+        # OpenX pretrained checkpoint path (optional, set to train from scratch if None)
+        checkpoint_path=None,  # Change to "best_vla_model" to load OpenX weights
     )
