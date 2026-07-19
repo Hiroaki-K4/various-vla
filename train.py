@@ -162,7 +162,7 @@ if __name__ == "__main__":
     lr_rate = 1e-5
     patience = 5
     eval_interval = 1000
-    num_workers = 4
+    num_workers = 0  # OpenX streaming dataset requires single-worker loading
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     save_model_path = "best_vla_model"
     gradient_accumulation_steps = 2
