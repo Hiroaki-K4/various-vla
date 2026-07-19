@@ -1,7 +1,7 @@
 import torch
 from peft import LoraConfig, get_peft_model
 from tqdm import tqdm
-from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
+from transformers import AutoTokenizer
 
 from action_tokenizer import ActionTokenizer
 from dataloader import get_dataloader
@@ -80,15 +80,6 @@ def train(
         tokenizer, at, batch_size=batch_size, split="val", num_workers=num_workers
     )
 
-    # Cosine schedule with warmup
-    total_steps = (num_epochs * len(train_loader)) // gradient_accumulation_steps
-    warmup_steps = max(1, int(total_steps * 0.05))
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_steps,
-    )
-    print(f"Scheduler: cosine warmup {warmup_steps} / {total_steps} steps")
 
     # Parameters for early stopping
     best_val_loss = float("inf")
@@ -122,7 +113,6 @@ def train(
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
-                scheduler.step()
 
             pbar.set_postfix(
                 {"train_loss": f"{loss.item() * gradient_accumulation_steps:.4f}"}
