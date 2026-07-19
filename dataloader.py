@@ -339,14 +339,24 @@ def _load_openx_with_retry(
     """
     for attempt in range(1, max_retries + 1):
         try:
-            return datasets.load_dataset(
-                "jxu124/OpenX-Embodiment",
-                name,
-                streaming=True,
-                split="train",
-                trust_remote_code=True,
-            )
-        except (OSError, IOError) as e:  # noqa: UP024
+            try:
+                return datasets.load_dataset(
+                    "jxu124/OpenX-Embodiment",
+                    name,
+                    streaming=True,
+                    split="train",
+                    trust_remote_code=True,
+                )
+            except ValueError as e:
+                if "trust_remote_code" in str(e):
+                    return datasets.load_dataset(
+                        "jxu124/OpenX-Embodiment",
+                        name,
+                        streaming=True,
+                        split="train",
+                    )
+                raise
+        except (OSError, IOError, ValueError) as e:  # noqa: UP024
             if attempt == max_retries:
                 print(
                     f"[dataloader] sub-dataset {name!r} unreachable after "
