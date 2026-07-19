@@ -11,7 +11,7 @@ dependencies = [
     "accelerate>=1.13.0",
     "datasets==2.14.0",
     "matplotlib>=3.10.0",
-    "opencv-python>=4.13.0.92",
+    "opencv-python>=4.8.0,<4.13",
     "peft>=0.19.1",
     "pillow==12.1.1",
     "pyarrow>=14.0.0,<15.0.0",
