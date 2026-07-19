@@ -10,7 +10,7 @@ LLM_MODEL_NAME = "meta-llama/Llama-3.2-1B"
 BATCH_SIZE = 2
 # Use fewer epochs per trial to keep tuning fast.
 NUM_EPOCHS = 1
-PATIENCE = 2
+PATIENCE = 3
 # Evaluate frequently so early stopping kicks in quickly for bad configs.
 EVAL_INTERVAL = 200
 NUM_WORKERS = 4
@@ -25,7 +25,7 @@ STORAGE = f"sqlite:///{STUDY_NAME}.db"  # persists results across restarts
 def objective(trial: optuna.Trial) -> float:
     # ── search space ──────────────────────────────────────────────────────────
     lr_rate = trial.suggest_float("lr_rate", 1e-6, 1e-3, log=True)
-    lora_r = trial.suggest_categorical("lora_r", [4, 8, 16, 32, 64])
+    lora_r = trial.suggest_categorical("lora_r", [8, 16, 32, 64])
     # alpha is suggested as a multiplier of r so the ratio stays meaningful.
     alpha_multiplier = trial.suggest_categorical("alpha_multiplier", [0.5, 1, 2])
     lora_alpha = int(lora_r * alpha_multiplier)

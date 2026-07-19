@@ -7,16 +7,18 @@ from train_libero import train
 
 # ── fixed settings ────────────────────────────────────────────────────────────
 DATASET_DIR = "libero/libero/datasets/libero_spatial"
-LLM_MODEL_NAME = "meta-llama/Llama-3.2-1B"
+LLM_MODEL_NAME = "meta-llama/Llama-3.2-3B"
 BATCH_SIZE = 2
-NUM_EPOCHS = 1
-PATIENCE = 3
+NUM_EPOCHS = 5
+PATIENCE = 5
 # Keep eval_interval short so early stopping kicks in quickly for bad configs.
-EVAL_INTERVAL = 500
+EVAL_INTERVAL = 1000
 NUM_WORKERS = 4
 GRADIENT_ACCUMULATION_STEPS = 2
 VAL_DEMOS = 5
-CAMERA = "agentview_rgb"
+CAMERAS = ("agentview_rgb", "eye_in_hand_rgb")  # Two-view input
+SEED = 42
+IMAGE_AUG = False
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_TRIALS = 20
@@ -54,8 +56,10 @@ def objective(trial: optuna.Trial) -> float:
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
         val_demos=VAL_DEMOS,
-        camera=CAMERA,
+        cameras=CAMERAS,
         warmup_ratio=warmup_ratio,
+        seed=SEED,
+        image_aug=IMAGE_AUG,
     )
 
     return val_loss
