@@ -58,7 +58,7 @@ OUTPUT_FEATURES = Features(
 DATASETS = [
     "fractal20220817_data",
     "kuka",
-    "bridge",
+    # "bridge",
     # "taco_play",
     # "jaco_play",
     # "berkeley_cable_routing",

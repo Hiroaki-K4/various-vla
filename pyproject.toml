@@ -9,7 +9,7 @@ dependencies = [
     "torchvision==0.23.0",
     "transformers==4.57.1",
     "accelerate>=1.13.0",
-    "datasets>=4.8.5",
+    "datasets<3.0.0",
     "matplotlib>=3.10.0",
     "opencv-python>=4.13.0.92",
     "peft>=0.19.1",
